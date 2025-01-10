@@ -36,7 +36,6 @@ select = [
     "G",
     "INP",
     "PIE",
-    "T20",
     "PYI",
     "PT",
     "Q",

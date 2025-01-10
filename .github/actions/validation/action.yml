@@ -1,3 +1,6 @@
+# GitHub actions is one of the possibile CI/CD solutions
+#they are procedures that are executed by Github and are used to build docker images.
+
 name: Code validation
 description: validate code by running linters and tests
 runs:

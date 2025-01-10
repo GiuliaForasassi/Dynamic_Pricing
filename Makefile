@@ -10,7 +10,7 @@ export AWS_ACCOUNT_ID=$(shell aws sts get-caller-identity --query Account --outp
 export PYPI_REPO_URL=https://mlcube-$(AWS_ACCOUNT_ID).d.codeartifact.eu-west-3.amazonaws.com/pypi/mlcube/
 export PYPI_INDEX_URL=https://aws:$(CODEARTIFACT_AUTH_TOKEN)@mlcube-$(AWS_ACCOUNT_ID).d.codeartifact.eu-west-3.amazonaws.com/pypi/mlcube/simple/
 
-export SRC_DIR=ml3_service_template
+export SRC_DIR=pricing-advertising
 ifndef BRANCH_NAME
 	export BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 endif

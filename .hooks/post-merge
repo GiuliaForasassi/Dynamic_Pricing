@@ -1,2 +1,4 @@
+# post-marge: runs the rule `dev-sync` to synchronize Python dependencies with the actual `requirements.txt` file
+
 #!/bin/sh
 make dev-sync

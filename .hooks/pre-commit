@@ -1,2 +1,5 @@
+# pre-commit: runs the rule `format` to format the code with Python guidelines
+
 #!/bin/sh
 make format
+
