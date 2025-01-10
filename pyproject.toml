@@ -1,0 +1,39 @@
+[project]
+name = "ml3-python-service"
+#name = "ML3 Python library template"
+version = "0.0.9"
+authors = [ {name="MLcube"}]
+description = "ML Repository template"
+readme = "README.md"
+requires-python = ">=3.12"
+# list of project dependencies
+dependencies = [
+    "fastapi",
+]
+
+
+# optional grouped dependencies that are installed only when explicitly requested
+[project.optional-dependencies]
+
+data = [
+    "polars"
+]
+
+
+# dev dependencies are installed during development but no for package
+[dependency-groups]
+
+# dependencies needed to lint and run tests
+dev = [
+    "mypy",
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio",
+    "pytest-xdist[psutil]",
+    "ruff",
+]
+
+[[tool.uv.index]]
+name = "internal-repo"
+url = "https://mlcube-883313729965.d.codeartifact.eu-west-3.amazonaws.com/pypi/ml3-platform/simple/"
