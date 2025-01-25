@@ -3,28 +3,21 @@ requires = ["setuptools==75.8.0"]
 
 [project]
 name = "pricing-advertising"
-#name = "ML3 Python library template"
 version = "0.0.9"
-authors = [ {name="Giulia Forasassi"}]
+authors = [ {name="Giulia Forasassi-ML3"}]
 description = "Pricing-Advertising"
 readme = "README.md"
 requires-python = ">=3.12"
 # list of project dependencies
 dependencies = [
+    "gymnasium>=1.0.0",
+    "matplotlib>=3.10.0",
+    "scipy>=1.15.1",
     "torch>=2.5.1",
 ]
 
-
-# optional grouped dependencies that are installed only when explicitly requested
-[project.optional-dependencies]
-
-
-
-
-# dev dependencies are installed during development but no for package
-[dependency-groups]
-
 # dependencies needed to lint and run tests
+[dependency-groups]
 dev = [
     "mypy",
     "pytest",
@@ -32,7 +25,7 @@ dev = [
     "pytest-mock",
     "pytest-asyncio",
     "pytest-xdist[psutil]",
-    "ruff",
+    "ruff>=0.7.3",
 ]
 
 [[tool.uv.index]]

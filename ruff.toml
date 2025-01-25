@@ -1,9 +1,9 @@
 line-length = 79
 indent-width = 4
 target-version = "py312"
-exclude = [
-    "tests"
-]
+# exclude = [
+#     "tests"
+# ]
 
 [lint]
 fixable = ["ALL"]
@@ -12,10 +12,9 @@ select = [
     "W",
     "E",
     "I",
-    "N", # names,
-    #"D", # docstrings
+    "N",     # names,
     "UP",
-    "ANN", # annotations
+    "ANN",   # annotations
     "ASYNC",
     #"S",  # security
     #"BLE" # blind exception
@@ -43,7 +42,7 @@ select = [
     #"RET", # return
     "SLF",
     "SLOT",
-    "SIM", # simplify
+    "SIM",  # simplify
     "TID",
     "TCH",
     "INT",
@@ -62,7 +61,8 @@ select = [
     #"PERF", # performance
     #"FURB", # refurb
     "LOG",
-    #"RUF", # ruff specific
+    "RUF", # ruff specific
+    "C90", # too much complex functions
 ]
 ignore = [
     "B008",
@@ -74,18 +74,18 @@ ignore = [
     "G004",
     "RSE102",
     "COM812",
-    "ISC001",
+    #"ISC001",
     "Q000",
     "Q003",
     "PLR0915",
     "PLR0911",
     "ANN101",
     "ANN102",
+    "D10",
+    "RUF010",
 ]
 
 [format]
-# Like Black, use double quotes for strings.
-quote-style = "single"
 
 # Like Black, indent with spaces, rather than tabs.
 indent-style = "space"
@@ -94,7 +94,7 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 
 # Like Black, automatically detect the appropriate line ending.
-line-ending = "auto"
+line-ending = "lf"
 
 # Enable auto-formatting of code examples in docstrings. Markdown,
 # reStructuredText code/literal blocks and doctests are all supported.
