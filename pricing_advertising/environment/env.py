@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import gymnasium as gym
 import numpy as np
 
-from pricing_advertising.clients.generation import ClientGenerator
+from pricing_advertising.clients.client_generator import ClientGenerator
 
 
 class PricingEnv(gym.Env):
@@ -54,3 +54,5 @@ class PricingEnv(gym.Env):
     # Close the environment
     def close(self):
         pass
+
+    # OTHER FUNCTIONS

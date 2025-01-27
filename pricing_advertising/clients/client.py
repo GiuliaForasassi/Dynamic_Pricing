@@ -5,9 +5,7 @@ from pricing_advertising.hotel.room import Room
 
 
 class Client:
-    def __init__(
-        self, t_reservation: date, days_stay: int, num_guests: int
-    ) -> None:
+    def __init__(self, t_reservation: date, days_stay: int, num_guests: int) -> None:
         """
         Initialize the client object.
 
