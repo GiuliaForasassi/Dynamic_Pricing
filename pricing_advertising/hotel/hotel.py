@@ -1,4 +1,6 @@
-from pricing_advertising.hotel.room import Room
+from datetime import date
+
+from pricing_advertising.hotel.room import Room, RoomCategory
 
 
 class Hotel:
@@ -14,15 +16,14 @@ class Hotel:
         self.num_category1_rooms = num_category1_rooms
         self.num_category2_rooms = num_category2_rooms
         self.num_category3_rooms = num_category3_rooms
-        self.rooms = {"category1": [], "category2": [], "category3": []}
+        self.rooms: dict[RoomCategory, list[Room]] = {
+            RoomCategory.CATEGORY1: [],
+            RoomCategory.CATEGORY2: [],
+            RoomCategory.CATEGORY3: [],
+        }
 
     def add_room(self, room: Room) -> None:
-        if room.category == 1:
-            self.rooms["category1"].append(room.room_id)
-        if room.category == 2:
-            self.rooms["category2"].append(room.room_id)
-        elif room.category == 3:
-            self.rooms["category3"].append(room.room_id)
+        self.rooms[room.category].append(room)
 
     @staticmethod
     def create_hotel(
@@ -38,11 +39,19 @@ class Hotel:
         # Populate the hotel with rooms
         for i in range(num_total_rooms):
             if i < num_category1:
-                category = 1
+                category = RoomCategory.CATEGORY1
             elif i < num_category1 + num_category2:
-                category = 2
+                category = RoomCategory.CATEGORY2
             else:
-                category = 3
+                category = RoomCategory.CATEGORY3
             room = Room(f"room{i}", category)
             hotel.add_room(room)
         return hotel
+
+    # TODO: add price management
+    # TODO: add another room proposal if the requested room is not available
+    def book_room(self, category: RoomCategory, t_reservation: date, days_stay: int) -> Room | None:
+        for room in self.rooms[category]:
+            if room.reserve_days(t_reservation, days_stay):
+                return room
+        return None
