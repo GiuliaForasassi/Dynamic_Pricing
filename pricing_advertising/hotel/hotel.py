@@ -51,7 +51,16 @@ class Hotel:
     # TODO: add price management
     # TODO: add another room proposal if the requested room is not available
     def book_room(self, category: RoomCategory, t_reservation: date, days_stay: int) -> Room | None:
+        # If a room of the given category is available, reserve it
         for room in self.rooms[category]:
             if room.reserve_days(t_reservation, days_stay):
                 return room
+
+        # If no room of the given category is available, propose an alternative room
+        alternatives = {
+            RoomCategory.CATEGORY1: [RoomCategory.CATEGORY2, RoomCategory.CATEGORY3],
+            RoomCategory.CATEGORY2: [RoomCategory.CATEGORY3],
+            RoomCategory.CATEGORY3: [],
+        }
+
         return None

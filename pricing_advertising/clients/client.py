@@ -6,14 +6,6 @@ from pricing_advertising.hotel.room import Room
 
 class Client:
     def __init__(self, t_reservation: date, days_stay: int, num_guests: int) -> None:
-        """
-        Initialize the client object.
-
-        Args:
-            t_reservation (date): Date of reservation.
-            days_stay (int): Number of days the client will stay.
-            num_guests (int): Number of guests in the reservation.
-        """
         self.t_reservation = t_reservation
         self.days_stay = days_stay
         self.num_guests = num_guests
