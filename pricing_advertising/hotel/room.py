@@ -17,7 +17,14 @@ class Room:
         self.start_simulation = start_simulation
         self.end_simulation = end_simulation
 
-        # availability of the room in the simulation period, initially all days are available
+        # Alternative rooms in case the room is not available
+        self.alternatives = {
+            RoomCategory.CATEGORY1: [RoomCategory.CATEGORY2, RoomCategory.CATEGORY3],
+            RoomCategory.CATEGORY2: [RoomCategory.CATEGORY3],
+            RoomCategory.CATEGORY3: [],
+        }
+
+        # Availability of the room in the simulation period, initially all days are available
         self.availability = {
             (start_simulation + timedelta(days=i)): True
             for i in range((end_simulation - start_simulation).days + 1)
@@ -30,19 +37,3 @@ class Room:
     # Check if the room is available for more days
     def is_available_days(self, t_reservation: date, days_stay: int) -> bool:
         return all(self.is_available(t_reservation + timedelta(days=i)) for i in range(days_stay))
-
-    # Reserve the room for a given date
-    def reserve(self, t_reservation: date) -> bool:
-        if self.is_available(t_reservation):
-            self.availability[t_reservation] = False
-            return True
-        else:
-            return False
-
-    def reserve_days(self, t_reservation: date, days_stay: int) -> bool:
-        if self.is_available_days(t_reservation, days_stay):
-            for i in range(days_stay):
-                self.reserve(t_reservation + timedelta(days=i))
-            return True
-        else:
-            return False

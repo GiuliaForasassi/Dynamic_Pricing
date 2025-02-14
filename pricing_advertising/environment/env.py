@@ -24,8 +24,6 @@ class PricingEnv(gym.Env):
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=(...), dtype=np.float32)
         # TODO: demand, booking lead time, seasonability
         # state variables:
-        # - current day of the simulation
-        # - start and end of the simulation
         # - occupancy of the hotel
         # - demand of the clients
         # - seasonability
@@ -43,26 +41,35 @@ class PricingEnv(gym.Env):
     # STEP FUNCTION
     # Execute 1 time step within the environment
     def step(self, action, num_clients: int):
-        self.num_clients = num_clients
+        # If no acions is provided, sample one from the policy
+
         # here use berstain coefficients
         # theta = ....
-        # clients generation
+        #
+
+        # Generate clients
+        self.num_clients = num_clients
         client_generator = ClientGenerator(num_clients, self.end_simulation)
         clients = client_generator.generate_clients(self.today)
+
+        # Generate the price vector using the Bernstein coefficients
         # TODO: dati i client, genera il vettore dei prezzi
-        # prices = self.generate_price_vector(len(clients))
+        # prices = self.generate_price_vector(theta, len(clients))
         # TODO: booking attempt
+
+        # Client booking process
         # for clients, prices in zip(clients, prices):
 
         # accepted_clients = .....
         # TODO: calcolo reward
-        # revenue = ......
+        # reward = ......
         # TODO: aggiorno info: tempo, occupancy ecc
+
         # Move to the next day
         self.today += timedelta(days=1)
         done = self.today >= self.end_simulation
         # return observation, reward, info
-        return self.observation_space.sample, revenue, done, {}
+        return self.observation_space.sample, reward, done, {}
 
     # RESET FUNCTION
     # Reset the environment to its initial state and return the initial observations

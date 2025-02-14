@@ -10,8 +10,6 @@ class Client:
         self.days_stay = days_stay
         self.num_guests = num_guests
 
-    # proposed_room è la stanza che popongo se quella chiesta dal client non è disponibile
-    # TODO: manage proposed_room
     def accept(self, total_price: float, proposed_room: Room) -> bool:
         if total_price < 100:
             return random() < 0.8  # True with 80% probability

@@ -25,7 +25,7 @@ def theta_to_beta(theta: np.ndarray) -> np.ndarray:
     return beta
 
 
-def decreasing_function_with_theta(x: np.ndarray, theta: np.ndarray) -> np.ndarray:
+def pricing_curve(x: np.ndarray, theta: np.ndarray) -> np.ndarray:
     """
     Calculate f(x) for a monotonically decreasing function using θ coefficients.
 

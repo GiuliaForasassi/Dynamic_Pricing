@@ -1,5 +1,7 @@
-from datetime import date
+from datetime import date, timedelta
+from random import random
 
+from pricing_advertising.clients import client
 from pricing_advertising.hotel.room import Room, RoomCategory
 
 
@@ -48,19 +50,24 @@ class Hotel:
             hotel.add_room(room)
         return hotel
 
-    # TODO: add price management
-    # TODO: add another room proposal if the requested room is not available
-    def book_room(self, category: RoomCategory, t_reservation: date, days_stay: int) -> Room | None:
-        # If a room of the given category is available, reserve it
+    def generate_random_price(self, base_price: float, variability: float = 0.2) -> float:
+        min_price = base_price * (1 - variability)
+        max_price = base_price * (1 + variability)
+        random_price = random.uniform(min_price, max_price)
+        return round(random_price, 2)
+
+    def book_room(self, category: RoomCategory, t_reservation: date, days_stay: int) -> Room:
         for room in self.rooms[category]:
-            if room.reserve_days(t_reservation, days_stay):
-                return room
-
-        # If no room of the given category is available, propose an alternative room
-        alternatives = {
-            RoomCategory.CATEGORY1: [RoomCategory.CATEGORY2, RoomCategory.CATEGORY3],
-            RoomCategory.CATEGORY2: [RoomCategory.CATEGORY3],
-            RoomCategory.CATEGORY3: [],
-        }
-
-        return None
+            if room.is_available_days(t_reservation, days_stay):
+                proposed_price = self.generate_random_price(100)
+                if client.accept(proposed_price, room):
+                    for i in range(days_stay):
+                        room.availability[t_reservation + timedelta(days=i)] = False
+                    return room
+                else:
+                    raise ValueError("Client refused the price")
+        # If no room is available in the requested category
+        if not self.rooms[category] and category != RoomCategory.CATEGORY3:
+            alternative_category = RoomCategory(category.value + 1)
+            return self.book_room(alternative_category, t_reservation, days_stay)
+        raise ValueError("No room available")
