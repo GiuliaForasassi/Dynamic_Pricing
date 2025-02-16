@@ -2,9 +2,9 @@ import numpy as np
 from scipy.special import comb
 
 
-# Define the Bernstein polynomial
-def bernstein_polynomial(k, M, x):  # noqa: ANN201
-    """Calculate the Bernstein polynomial ψk(x, M)."""
+# Define the Bernstein kth-basis polynomial
+def bernstein_basis_polynomial(k: int, M: int, x: np.ndarray | float) -> np.ndarray | float:  # noqa: ANN201
+    """Calculate the Bernstein kth-basis polynomial ψk(x, M)."""
     return comb(M, k) * (x**k) * ((1 - x) ** (M - k))
 
 
@@ -18,6 +18,8 @@ def theta_to_beta(theta: np.ndarray) -> np.ndarray:
     Returns:
         numpy.ndarray: β coefficients.
     """
+    # theta_M = beta_M
+    # theta_k =  beta_k - beta_{k+1}
     M = len(theta) - 1
     beta = np.zeros_like(theta)
     for k in range(M + 1):
@@ -25,7 +27,9 @@ def theta_to_beta(theta: np.ndarray) -> np.ndarray:
     return beta
 
 
-def pricing_curve(x: np.ndarray, theta: np.ndarray) -> np.ndarray:
+def bernstein_monotonic_decreasing_polynomial(
+    x: np.ndarray | float, theta: np.ndarray
+) -> np.ndarray | float:
     """
     Calculate f(x) for a monotonically decreasing function using θ coefficients.
 
@@ -38,7 +42,7 @@ def pricing_curve(x: np.ndarray, theta: np.ndarray) -> np.ndarray:
     """
     beta = theta_to_beta(theta)  # Convert θ to β
     M = len(beta) - 1
-    f_values = np.zeros_like(x)
+    f_values = np.zeros_like(x, dtype=float)
     for k in range(M + 1):
-        f_values += beta[k] * bernstein_polynomial(k, M, x)
+        f_values += beta[k] * bernstein_basis_polynomial(k, M, x)
     return f_values

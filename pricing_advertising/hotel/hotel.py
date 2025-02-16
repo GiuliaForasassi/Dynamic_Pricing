@@ -1,8 +1,12 @@
 from datetime import date, timedelta
 from random import random
 
-from pricing_advertising.clients import client
+import numpy as np
+
+from pricing_advertising.clients.client import Client
+from pricing_advertising.exception.booking import ClientRefusedError, RoomUnavailableError
 from pricing_advertising.hotel.room import Room, RoomCategory
+from pricing_advertising.policies.pricing.policy import PricingPolicy
 
 
 class Hotel:
@@ -50,24 +54,71 @@ class Hotel:
             hotel.add_room(room)
         return hotel
 
-    def generate_random_price(self, base_price: float, variability: float = 0.2) -> float:
-        min_price = base_price * (1 - variability)
-        max_price = base_price * (1 + variability)
-        random_price = random.uniform(min_price, max_price)
-        return round(random_price, 2)
+    def handle_daily_requests(self, clients: list[Client], policy: PricingPolicy, today: date):
+        # generate prices: policy + propose other categories rooms
+        # prices is a matrix of shape (num_category, total_days)
+        prices: np.ndarray = policy.select_price(self.rooms, clients)
+        # TODO: consider past prices
 
-    def book_room(self, category: RoomCategory, t_reservation: date, days_stay: int) -> Room:
-        for room in self.rooms[category]:
-            if room.is_available_days(t_reservation, days_stay):
-                proposed_price = self.generate_random_price(100)
-                if client.accept(proposed_price, room):
-                    for i in range(days_stay):
-                        room.availability[t_reservation + timedelta(days=i)] = False
-                    return room
-                else:
-                    raise ValueError("Client refused the price")
-        # If no room is available in the requested category
-        if not self.rooms[category] and category != RoomCategory.CATEGORY3:
-            alternative_category = RoomCategory(category.value + 1)
-            return self.book_room(alternative_category, t_reservation, days_stay)
-        raise ValueError("No room available")
+        # step 1a
+        # Matching clients with rooms
+        # Assumption: matching is indipendent from the price
+        assignements = {}
+        for client in clients:
+            if client.num_guests > 3:
+                raise RoomUnavailableError("No room available for more than 3 guests")
+            category = client.get_category()
+            for room in self.rooms[category]:
+                if room.is_available_days(
+                    client.t_reservation, client.days_stay
+                ) and not self.room_already_assigned(room, client, assignements):
+                    assignements[client] = room
+        # step 1b
+        # Propose other categories rooms
+        for client in clients:
+            if client not in assignements:
+                category = client.get_category()
+                for alternative_category in room.alternatives[category]:
+                    for room in self.rooms[alternative_category]:
+                        if room.is_available_days(
+                            client.t_reservation, client.days_stay
+                        ) and not self.room_already_assigned(room, client, assignements):
+                            assignements[client] = room
+
+        # step 2
+        # Notify clients: acceptance + update availability
+        for client in clients:
+            if client not in assignements:
+                continue
+            proposed_room: Room = assignements[client]
+            t_advance_index = (client.t_reservation - today).days
+            proposed_price = prices[
+                proposed_room.category.value - 1,
+                t_advance_index : t_advance_index + client.days_stay,
+            ].sum()
+            if client.accept(proposed_price, room):
+                # TODO: save somewhere the accepted price, so that we can use it for the constraints in the future
+                for i in range(client.days_stay):
+                    room.availability[client.t_reservation + timedelta(days=i)] = False
+                return room
+            else:
+                raise ClientRefusedError("Client refused the price")
+
+    # Check if the room is already assigned in the days specified by the client
+    def room_already_assigned(
+        self, room: Room, client: Client, assignements: dict[Client, Room]
+    ) -> bool:
+        for assigned_client, assigned_room in assignements.items():
+            overlap = False
+            if (
+                client.t_reservation <= assigned_client.t_reservation
+                and client.days_stay > (assigned_client.t_reservation - client.t_reservation).days
+            ) or (
+                client.t_reservation > assigned_client.t_reservation
+                and assigned_client.t_reservation + timedelta(days=assigned_client.days_stay)
+                > client.t_reservation
+            ):
+                overlap = True
+            if room == assigned_room and overlap:
+                return True
+        return False

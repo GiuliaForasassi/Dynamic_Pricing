@@ -1,7 +1,7 @@
 from datetime import date
 from random import random
 
-from pricing_advertising.hotel.room import Room
+from pricing_advertising.hotel.room import Room, RoomCategory
 
 
 class Client:
@@ -21,3 +21,11 @@ class Client:
 
     def __repr__(self):
         return self.__str__()
+
+    def get_category(self):
+        if self.num_guests == 1:
+            return RoomCategory.CATEGORY1
+        elif self.num_guests == 2:
+            return RoomCategory.CATEGORY2
+        else:
+            return RoomCategory.CATEGORY3

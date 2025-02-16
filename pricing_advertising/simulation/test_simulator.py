@@ -20,7 +20,7 @@ def run_test_simulation() -> None:
 
     print("Starting simulation...")
     while not done:
-        action = env.policy.select_action(state)
+        action = env.policy.select_price(state)
         state, reward, done, _ = env.step(action)
         total_reward += reward
         print(f"Day: {env.today} | Revenue: {reward} | Total Revenue: {total_reward}")

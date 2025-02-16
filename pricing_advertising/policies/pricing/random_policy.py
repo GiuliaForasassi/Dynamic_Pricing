@@ -1,0 +1,33 @@
+import random
+from datetime import date
+
+import numpy as np
+
+from pricing_advertising.clients.client import Client
+from pricing_advertising.hotel.room import Room, RoomCategory
+from pricing_advertising.policies.pricing.policy import PricingPolicy
+
+
+class RandomPricingPolicy(PricingPolicy):
+    def __init__(self, start_simulation: date, end_simulation: date, num_coefficients: int) -> None:
+        super().__init__(start_simulation, end_simulation)
+        self.num_coefficients = num_coefficients
+
+    def select_price_coefficients(
+        self, rooms: dict[RoomCategory, list[Room]], clients: list[Client]
+    ) -> np.ndarray:
+        num_categories = len(RoomCategory)
+        prices_coefficients = np.zeros((num_categories, self.num_coefficients))
+        for cat in range(num_categories):
+            for k in range(self.num_coefficients):
+                # kth coefficient for the category
+                prices_coefficients[cat, k] = max(0, generate_random_price(100))
+
+        return prices_coefficients  # prices.shape == (num_categories, num_coefficents)
+
+
+def generate_random_price(base_price: float, variability: float = 0.2) -> float:
+    min_price = base_price * (1 - variability)
+    max_price = base_price * (1 + variability)
+    random_price = random.uniform(min_price, max_price)
+    return round(random_price, 2)

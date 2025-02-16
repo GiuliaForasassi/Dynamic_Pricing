@@ -5,7 +5,7 @@ import numpy as np
 
 from pricing_advertising.clients.client_generator import ClientGenerator
 from pricing_advertising.hotel.hotel import Hotel
-from pricing_advertising.policies.random_policy import RandomPolicy
+from pricing_advertising.policies.pricing.random_policy import RandomPricingPolicy
 
 
 class PricingEnv(gym.Env):
@@ -32,9 +32,10 @@ class PricingEnv(gym.Env):
         self.today: date = start_simulation
         self.start_simulation: date = start_simulation
         self.end_simulation: date = end_simulation
+        self.hotel: Hotel = hotel
 
         # Initialize the random policy
-        self.policy = RandomPolicy(self.action_space)
+        self.policy = RandomPricingPolicy(start_simulation, end_simulation, num_coefficients=4)
 
         # Initialize the revenue
 
@@ -62,7 +63,7 @@ class PricingEnv(gym.Env):
 
         # accepted_clients = .....
         # TODO: calcolo reward
-        # reward = ......
+        reward = ...
         # TODO: aggiorno info: tempo, occupancy ecc
 
         # Move to the next day
