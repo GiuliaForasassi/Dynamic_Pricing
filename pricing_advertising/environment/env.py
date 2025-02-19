@@ -5,37 +5,52 @@ import numpy as np
 
 from pricing_advertising.clients.client_generator import ClientGenerator
 from pricing_advertising.hotel.hotel import Hotel
+from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.policies.pricing.random_policy import RandomPricingPolicy
 
+# Register the PricingEnv environment with OpenAI Gym
+# gym.register(id="PricingEnv-v0", entry_point="pricing_advertising.environment.env:PricingEnv")
 
+
+# Implement the PricingEnv environment as a subclass of gym.Env
 class PricingEnv(gym.Env):
-    metadata = {"render.modes": ["human"]}
+    # Metadata is a required attribute for the environment
+    # It specifies the render modes (for rendering) and the rendering frames per second
+    metadata = {"render.modes": ["human"], "render_fps": 1}
 
-    def __init__(
-        self, start_simulation: date, end_simulation: date, num_coefficients: int, hotel: Hotel
-    ) -> None:
+    def __init__(self, start_simulation: date, end_simulation: date, hotel: Hotel) -> None:
         super().__init__()
 
+        # Define the dimensions of the state and action spaces
+        num_room_categories = len(RoomCategory)
+        num_coefficients = 4
+        total_days = (end_simulation - start_simulation).days
+
         # Define the action and observation space
-        self.num_coefficients = num_coefficients  # number of bernstein coefficients
+        # Obsevation space includes hotel occupancy, past demand, seasonality
+        self.observation_space = gym.spaces.Dict(
+            {
+                "occupancy": gym.spaces.MultiBinary([hotel.num_total_rooms, total_days]),
+                "demand": gym.spaces.Discrete([total_days]),
+                # represent a day as a integer number
+                # TODO: coversion sin and cosine
+                "today": gym.spaces.Discrete(1),
+                # TODO: remember to add seasonality
+            }
+        )
+        # action space is coefficients of the Bernstein polynomial
         self.action_space = gym.spaces.Box(
-            low=0, high=200, shape=(self.num_coefficients,), dtype=np.float32
-        )  # action space is the vector of bernstein coefficients
-        self.observation_space = gym.spaces.Box(low=0, high=1, shape=(...), dtype=np.float32)
-        # TODO: demand, booking lead time, seasonability
-        # state variables:
-        # - occupancy of the hotel
-        # - demand of the clients
-        # - seasonability
+            low=0,
+            high=float("inf"),
+            shape=(num_room_categories, num_coefficients),
+            dtype=np.float32,
+        )
 
         # Initiliaze the state
         self.today: date = start_simulation
         self.start_simulation: date = start_simulation
         self.end_simulation: date = end_simulation
         self.hotel: Hotel = hotel
-
-        # Initialize the random policy
-        self.policy = RandomPricingPolicy(start_simulation, end_simulation, num_coefficients=4)
 
         # Initialize the revenue
 
@@ -59,7 +74,6 @@ class PricingEnv(gym.Env):
         # TODO: booking attempt
 
         # Client booking process
-        # for clients, prices in zip(clients, prices):
 
         # accepted_clients = .....
         # TODO: calcolo reward
@@ -74,7 +88,8 @@ class PricingEnv(gym.Env):
 
     # RESET FUNCTION
     # Reset the environment to its initial state and return the initial observations
-    def reset(self):
+    def reset(self, seed=None):
+        super().reset(seed=seed)  # requires this call to control randomness and reproducibility
         # TODO: reset occupancy hotel
         # TODO: reset demand
         # TODO: reset time horizon
@@ -93,3 +108,8 @@ class PricingEnv(gym.Env):
         pass
 
     # OTHER FUNCTIONS
+    def get_obs(self):
+        pass
+
+    def get_info(self):
+        pass

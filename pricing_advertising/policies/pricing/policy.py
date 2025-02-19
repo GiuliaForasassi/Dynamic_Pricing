@@ -9,10 +9,6 @@ from pricing_advertising.utils.bernstein_polynomial import bernstein_monotonic_d
 
 
 class PricingPolicy(ABC):
-    # def __init__(self) -> None:
-    # self.num_actions = ...
-    # self.action_space = ....
-
     def __init__(self, start_simulation: date, end_simulation: date):
         super().__init__()
         self.start_simulation = start_simulation

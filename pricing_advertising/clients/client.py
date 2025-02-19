@@ -22,7 +22,7 @@ class Client:
     def __repr__(self):
         return self.__str__()
 
-    def get_category(self):
+    def get_category(self) -> RoomCategory:
         if self.num_guests == 1:
             return RoomCategory.CATEGORY1
         elif self.num_guests == 2:
