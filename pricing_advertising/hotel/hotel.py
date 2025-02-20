@@ -1,5 +1,4 @@
 from datetime import date, timedelta
-from random import random
 
 import numpy as np
 
@@ -16,43 +15,40 @@ class Hotel:
         num_category1_rooms: int,
         num_category2_rooms: int,
         num_category3_rooms: int,
+        start_simulation: date,
+        end_simulation: date,
     ) -> None:
-        # Initialize the hotel
         self.num_total_rooms = num_total_rooms
-        self.num_category1_rooms = num_category1_rooms
-        self.num_category2_rooms = num_category2_rooms
-        self.num_category3_rooms = num_category3_rooms
-        self.rooms: dict[RoomCategory, list[Room]] = {
-            RoomCategory.CATEGORY1: [],
-            RoomCategory.CATEGORY2: [],
-            RoomCategory.CATEGORY3: [],
+        self.start_simulation = start_simulation  # day of start simulation
+        self.end_simulation = end_simulation  # day of end simulation
+        self.total_days = (end_simulation - start_simulation).days + 1
+
+        self.num_rooms = {
+            RoomCategory.CATEGORY1: num_category1_rooms,
+            RoomCategory.CATEGORY2: num_category2_rooms,
+            RoomCategory.CATEGORY3: num_category3_rooms,
         }
 
-    def add_room(self, room: Room) -> None:
-        self.rooms[room.category].append(room)
+        self.rooms: list[Room] = []
+        for category in RoomCategory:
+            for _ in range(self.num_rooms[category]):
+                room = Room(len(self.rooms), category)
+                self.rooms.append(room)
 
-    @staticmethod
-    def create_hotel(
-        num_total_rooms: int, num_category1: int, num_category2: int, num_category3: int
-    ) -> "Hotel":
-        # Validate input parameters
-        if num_total_rooms != num_category1 + num_category2 + num_category3:
-            raise ValueError(
-                "The total number of rooms must be equal to the sum of the rooms in each category"
-            )
-        # Create the hotel
-        hotel = Hotel(num_total_rooms, num_category1, num_category2, num_category3)
-        # Populate the hotel with rooms
-        for i in range(num_total_rooms):
-            if i < num_category1:
-                category = RoomCategory.CATEGORY1
-            elif i < num_category1 + num_category2:
-                category = RoomCategory.CATEGORY2
-            else:
-                category = RoomCategory.CATEGORY3
-            room = Room(f"room{i}", category)
-            hotel.add_room(room)
-        return hotel
+        # matrix of shape (num_total_rooms, total_days) that indicates the availability of each room
+        self.occupancy = np.zeros(
+            (num_total_rooms, self.total_days), dtype=bool
+        )  # initially all rooms are available
+
+    # Check if the room is available for the client requested period
+    def room_is_available(self, room: Room, client: Client) -> bool:
+        room_idx = room.room_id
+        reservation_idx = (client.t_reservation - self.start_simulation).days
+        days_stay = client.days_stay
+        # Ensure the requested period is within the simulation period
+        if reservation_idx < 0 or reservation_idx + days_stay >= self.total_days:
+            return False
+        return np.all(self.occupancy[room_idx, reservation_idx : reservation_idx + days_stay] == 0)
 
     def handle_daily_requests(self, clients: list[Client], policy: PricingPolicy, today: date):
         # generate prices: policy + propose other categories rooms
@@ -67,11 +63,13 @@ class Hotel:
         for client in clients:
             if client.num_guests > 3:
                 raise RoomUnavailableError("No room available for more than 3 guests")
+
             category = client.get_category()
+
             for room in self.rooms[category]:
-                if room.is_available_days(
-                    client.t_reservation, client.days_stay
-                ) and not self.room_already_assigned(room, client, assignements):
+                if self.room_is_available(room, client) and not self.room_already_assigned(
+                    room, client, assignements
+                ):
                     assignements[client] = room
         # step 1b
         # Propose other categories rooms
@@ -80,9 +78,9 @@ class Hotel:
                 category = client.get_category()
                 for alternative_category in room.alternatives[category]:
                     for room in self.rooms[alternative_category]:
-                        if room.is_available_days(
-                            client.t_reservation, client.days_stay
-                        ) and not self.room_already_assigned(room, client, assignements):
+                        if self.room_is_available(room, client) and not self.room_already_assigned(
+                            room, client, assignements
+                        ):
                             assignements[client] = room
 
         # step 2
@@ -90,17 +88,22 @@ class Hotel:
         for client in clients:
             if client not in assignements:
                 continue
+
             proposed_room: Room = assignements[client]
             t_advance_index = (client.t_reservation - today).days
+            # Compute the total price for the client's stay
             proposed_price = prices[
                 proposed_room.category.value - 1,
                 t_advance_index : t_advance_index + client.days_stay,
             ].sum()
-            if client.accept(proposed_price, room):
+
+            if client.accept(proposed_price, proposed_room):
+                index_reservation = self.date_to_index(client.t_reservation)
                 # TODO: save somewhere the accepted price, so that we can use it for the constraints in the future
-                for i in range(client.days_stay):
-                    room.availability[client.t_reservation + timedelta(days=i)] = False
-                return room
+                self.occupancy[
+                    proposed_room.room_id, index_reservation : index_reservation + client.days_stay
+                ] = False
+                return proposed_room
             else:
                 raise ClientRefusedError("Client refused the price")
 
@@ -122,3 +125,5 @@ class Hotel:
             if room == assigned_room and overlap:
                 return True
         return False
+
+    # def get_occupancy(self, )

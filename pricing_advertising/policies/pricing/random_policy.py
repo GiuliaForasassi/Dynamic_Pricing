@@ -3,8 +3,7 @@ from datetime import date
 
 import numpy as np
 
-from pricing_advertising.clients.client import Client
-from pricing_advertising.hotel.room import Room, RoomCategory
+from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.policies.pricing.policy import PricingPolicy
 
 
@@ -13,9 +12,7 @@ class RandomPricingPolicy(PricingPolicy):
         super().__init__(start_simulation, end_simulation)
         self.num_coefficients = num_coefficients
 
-    def select_price_coefficients(
-        self, rooms: dict[RoomCategory, list[Room]], clients: list[Client]
-    ) -> np.ndarray:
+    def select_price_coefficients(self, observation) -> np.ndarray:
         num_categories = len(RoomCategory)
         prices_coefficients = np.zeros((num_categories, self.num_coefficients))
         for cat in range(num_categories):

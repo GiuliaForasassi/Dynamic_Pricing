@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from datetime import date
 
+import gymnasium as gym
 import numpy as np
 
-from pricing_advertising.clients.client import Client
-from pricing_advertising.hotel.room import Room, RoomCategory
+from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.utils.bernstein_polynomial import bernstein_monotonic_decreasing_polynomial
 
 
@@ -14,11 +14,10 @@ class PricingPolicy(ABC):
         self.start_simulation = start_simulation
         self.end_simulation = end_simulation
 
-    def select_price(
-        self, rooms: dict[RoomCategory, list[Room]], clients: list[Client]
-    ) -> np.ndarray:
+    # TODO: change this function, it has to return an action
+    def select_price(self, observation) -> gym.spaces.Box:
         num_categories = len(RoomCategory)
-        coefficients = self.select_price_coefficients(rooms, clients)
+        coefficients = self.select_price_coefficients(observation)
 
         num_days = (self.end_simulation - self.start_simulation).days + 1
         prices = np.zeros((num_categories, num_days))
@@ -31,7 +30,5 @@ class PricingPolicy(ABC):
         return prices
 
     @abstractmethod
-    def select_price_coefficients(
-        self, rooms: dict[RoomCategory, list[Room]], clients: list[Client]
-    ) -> np.ndarray:
+    def select_price_coefficients(self, observation) -> np.ndarray:
         pass

@@ -1,4 +1,6 @@
+import random
 from datetime import date, timedelta
+from typing import ClassVar
 
 import gymnasium as gym
 import numpy as np
@@ -15,13 +17,12 @@ from pricing_advertising.policies.pricing.random_policy import RandomPricingPoli
 # Implement the PricingEnv environment as a subclass of gym.Env
 class PricingEnv(gym.Env):
     # Metadata is a required attribute for the environment
-    # It specifies the render modes (for rendering) and the rendering frames per second
-    metadata = {"render.modes": ["human"], "render_fps": 1}
+    metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}
 
     def __init__(self, start_simulation: date, end_simulation: date, hotel: Hotel) -> None:
         super().__init__()
 
-        # Define the dimensions of the state and action spaces
+        # Define the dimensions of the state and action spaces and other vars/structure data you need
         num_room_categories = len(RoomCategory)
         num_coefficients = 4
         total_days = (end_simulation - start_simulation).days
@@ -30,8 +31,8 @@ class PricingEnv(gym.Env):
         # Obsevation space includes hotel occupancy, past demand, seasonality
         self.observation_space = gym.spaces.Dict(
             {
-                "occupancy": gym.spaces.MultiBinary([hotel.num_total_rooms, total_days]),
-                "demand": gym.spaces.Discrete([total_days]),
+                "occupancy": gym.spaces.Box([num_room_categories, total_days]),
+                "demand": gym.spaces.Discrete([num_room_categories, total_days]),
                 # represent a day as a integer number
                 # TODO: coversion sin and cosine
                 "today": gym.spaces.Discrete(1),
@@ -56,15 +57,15 @@ class PricingEnv(gym.Env):
 
     # STEP FUNCTION
     # Execute 1 time step within the environment
-    def step(self, action, num_clients: int):
+    def step(self, action: gym.spaces.Box):
         # If no acions is provided, sample one from the policy
 
-        # here use berstain coefficients
+        # here use bernstein coefficients
         # theta = ....
         #
 
         # Generate clients
-        self.num_clients = num_clients
+        num_clients = random.randint(4, 15)
         client_generator = ClientGenerator(num_clients, self.end_simulation)
         clients = client_generator.generate_clients(self.today)
 
@@ -108,8 +109,10 @@ class PricingEnv(gym.Env):
         pass
 
     # OTHER FUNCTIONS
+
+    # Translate the environment's state into an observation
     def get_obs(self):
-        pass
+        occupancy = self.hotel.get_occehupancy()
 
     def get_info(self):
         pass
