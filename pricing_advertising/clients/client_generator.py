@@ -16,7 +16,7 @@ class ClientGenerator:
         # initialize the list of clients
         clients = []
         # generation of clients
-        for i in range(num_clients):
+        for _ in range(num_clients):
             client = self.generate_client(today)
             clients.append(client)
 

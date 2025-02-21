@@ -31,11 +31,12 @@ class PricingEnv(gym.Env):
         # Obsevation space includes hotel occupancy, past demand, seasonality
         self.observation_space = gym.spaces.Dict(
             {
-                "occupancy": gym.spaces.Box([num_room_categories, total_days]),
-                "demand": gym.spaces.Discrete([num_room_categories, total_days]),
+                "occupancy": gym.spaces.Box(low=0, high=1, shape=(num_room_categories, total_days)),
+                # 1000 da parametrizzare: max customer
+                "demand": gym.spaces.Box(low=0, high=1000, shape=(num_room_categories, total_days)),
                 # represent a day as a integer number
                 # TODO: coversion sin and cosine
-                "today": gym.spaces.Discrete(1),
+                "today": gym.spaces.Box(low=0, high=1),
                 # TODO: remember to add seasonality
             }
         )

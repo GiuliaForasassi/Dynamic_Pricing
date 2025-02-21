@@ -50,6 +50,7 @@ class Hotel:
             return False
         return np.all(self.occupancy[room_idx, reservation_idx : reservation_idx + days_stay] == 0)
 
+    # REVIEW THIS PART, PROBABLY IT WILL MOVE TO THE ENVIRONMENT
     def handle_daily_requests(self, clients: list[Client], policy: PricingPolicy, today: date):
         # generate prices: policy + propose other categories rooms
         # prices is a matrix of shape (num_category, total_days)
