@@ -4,7 +4,7 @@ from random import random
 from pricing_advertising.hotel.room import Room, RoomCategory
 
 
-class Client:
+class Request:
     def __init__(self, t_reservation: date, days_stay: int, num_guests: int) -> None:
         self.t_reservation = t_reservation
         self.days_stay = days_stay
