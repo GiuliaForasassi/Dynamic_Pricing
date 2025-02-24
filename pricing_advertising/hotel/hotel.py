@@ -12,14 +12,13 @@ from pricing_advertising.utils.constants import MAX_GUESTS
 class Hotel:
     def __init__(
         self,
-        num_total_rooms: int,
         num_category1_rooms: int,
         num_category2_rooms: int,
         num_category3_rooms: int,
         start_simulation: date,
         end_simulation: date,
     ) -> None:
-        self.num_total_rooms = num_total_rooms
+        num_total_rooms = num_category1_rooms + num_category2_rooms + num_category3_rooms
         self.start_simulation = start_simulation  # day of start simulation
         self.end_simulation = end_simulation  # day of end simulation
         self.total_days = (end_simulation - start_simulation).days + 1
@@ -130,5 +129,3 @@ class Hotel:
             if room == assigned_room and overlap:
                 return True
         return False
-
-    # def get_occupancy(self, )
