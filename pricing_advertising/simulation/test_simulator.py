@@ -25,7 +25,6 @@ def run_test_simulation() -> None:
 
     observation, info = env.reset(seed=42)
 
-    # Run the simulation for 14 days ??
     for _ in range(simulation_days):
         action = policy.select_price(observation)
         observation, reward, done, terminated, truncated, info = env.step(action)

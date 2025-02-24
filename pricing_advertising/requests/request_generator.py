@@ -27,9 +27,16 @@ class RequestGenerator:
         else:
             self.distribution = distribution
 
-    # Generate a list of requests
     def generate_requests(self, today: date) -> list[Request]:
-        # number of requests is sampled from a normal distribution
+        """
+        Generate a list of requests for a given date.
+
+        Args:
+            today (date): The date for which to generate requests.
+
+        Returns:
+            list[Request]: A list of generated requests.
+        """
         num_requests = self.sample_num_requests()
         # initialize the list of requests
         requests = []
@@ -39,8 +46,18 @@ class RequestGenerator:
             requests.append(request)
         return requests
 
-    # Sample the number of requests from a normal distribution
     def sample_num_requests(self) -> int:
+        """
+        Sample the number of requests based on a distribution and a minimum factor.
+
+        This method samples the number of requests from a specified distribution
+        and ensures that the sampled number is at least a minimum value, which is
+        calculated as a factor of the average number of requests. The sampled number
+        is then rounded to the nearest integer.
+
+        Returns:
+            int: The sampled number of requests, rounded to the nearest integer.
+        """
         min_num_requests = MIN_NUM_REQUESTS_FACTOR * self.avg_num_requests
         # Sample the number of requests from the distribution provided
         num_requests = max(self.distribution.rvs(), min_num_requests)
@@ -48,8 +65,20 @@ class RequestGenerator:
         num_requests = round(num_requests)
         return num_requests
 
-    # Generate a single request
     def generate_request(self, today: date) -> Request:
+        """
+        Generates a reservation request for a given date.
+
+        Args:
+            today (date): The current date from which the reservation is generated.
+
+        Returns:
+            Request: A request object containing the reservation date, duration of stay, and number of guests.
+
+        Raises:
+            RequestGeneratorError: If there are no more days available for reservations.
+
+        """
         remaining_days = (self.end_simulation - today).days
         if remaining_days <= 0:
             raise RequestGeneratorError("No more days available for reservations")

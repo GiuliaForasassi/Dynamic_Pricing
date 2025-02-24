@@ -23,6 +23,15 @@ class Request:
         return self.__str__()
 
     def get_category(self) -> RoomCategory:
+        """
+        Determines the room category based on the number of guests.
+
+        Returns:
+            RoomCategory: The category of the room based on the number of guests.
+                - CATEGORY1: If there is 1 guest.
+                - CATEGORY2: If there are 2 guests.
+                - CATEGORY3: If there 3 guests.
+        """
         if self.num_guests == 1:
             return RoomCategory.CATEGORY1
         elif self.num_guests == 2:
