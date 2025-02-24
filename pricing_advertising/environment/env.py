@@ -5,10 +5,10 @@ from typing import ClassVar
 import gymnasium as gym
 import numpy as np
 
-from pricing_advertising.clients.client_generator import ClientGenerator
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.policies.pricing.random_policy import RandomPricingPolicy
+from pricing_advertising.requests.request_generator import RequestGenerator
 
 # Register the PricingEnv environment with OpenAI Gym
 # gym.register(id="PricingEnv-v0", entry_point="pricing_advertising.environment.env:PricingEnv")
@@ -66,9 +66,9 @@ class PricingEnv(gym.Env):
         #
 
         # Generate clients
-        num_clients = random.randint(4, 15)
-        client_generator = ClientGenerator(num_clients, self.end_simulation)
-        clients = client_generator.generate_clients(self.today)
+        num_requests = random.randint(4, 15)
+        # client_generator = RequestGenerator(num_clients, self.end_simulation)
+        requests = RequestGenerator.generate_requests(self.today)
 
         # Generate the price vector using the Bernstein coefficients
         # TODO: dati i client, genera il vettore dei prezzi
@@ -99,21 +99,11 @@ class PricingEnv(gym.Env):
         # return observation, info
         pass
 
-    # RENDER FUNCTION
-    # Render the environment
-    def render(self):
-        pass
-
-    # CLOSE FUNCTION
-    # Close the environment
-    def close(self):
-        pass
-
     # OTHER FUNCTIONS
 
     # Translate the environment's state into an observation
     def get_obs(self):
-        occupancy = self.hotel.get_occehupancy()
+        occupancy = self.hotel.get_occupancy()
 
     def get_info(self):
         pass

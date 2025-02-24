@@ -1,40 +1,40 @@
 import random
 from datetime import date, timedelta
 
-from pricing_advertising.clients.client import Client
+from pricing_advertising.requests.request import Request
 
 
-class ClientGenerator:
-    def __init__(self, avg_num_clients: int, end_simulation: date) -> None:
-        self.avg_num_clients = avg_num_clients
+class RequestGenerator:
+    def __init__(self, avg_num_requests: int, end_simulation: date) -> None:
+        self.avg_num_requests = avg_num_requests
         self.end_simulation = end_simulation
 
     # Generate a list of clients
-    def generate_clients(self, today: date) -> list[Client]:
+    def generate_requests(self, today: date) -> list[Request]:
         # number of clients is sampled from a normal distribution
-        num_clients = self.sample_num_clients()
+        num_requests = self.sample_num_requests()
         # initialize the list of clients
-        clients = []
+        requests = []
         # generation of clients
-        for _ in range(num_clients):
-            client = self.generate_client(today)
-            clients.append(client)
+        for _ in range(num_requests):
+            request = self.generate_request(today)
+            requests.append(request)
 
-        return clients
+        return requests
 
     # Sample the number of clients from a normal distribution
-    def sample_num_clients(self) -> int:
+    def sample_num_requests(self) -> int:
         # standard deviation is 10% of the average number of clients
-        std = 0.1 * self.avg_num_clients
+        std = 0.1 * self.avg_num_requests
         # minimum number of clients is 10% of the average number of clients
-        min_num_clients = 0.2 * self.avg_num_clients
-        num_clients = max(random.gauss(self.avg_num_clients, std), min_num_clients)
+        min_num_requests = 0.2 * self.avg_num_requests
+        num_requests = max(random.gauss(self.avg_num_requests, std), min_num_requests)
         # round the number of clients to the nearest integer
-        num_clients = round(num_clients)
-        return num_clients
+        num_requests = round(num_requests)
+        return num_requests
 
     # Generate a single client
-    def generate_client(self, today: date) -> Client:
+    def generate_request(self, today: date) -> Request:
         remaining_days = (self.end_simulation - today).days
         assert remaining_days > 0, "No more days available for reservations"
         # reservation date is between today and the last day of the simulation
@@ -43,4 +43,4 @@ class ClientGenerator:
         days_stay = random.randint(1, min(10, remaining_days))
         # number of guests can be 1, 2 or 3
         num_guests = random.randint(1, 3)
-        return Client(t_reservation, days_stay, num_guests)
+        return Request(t_reservation, days_stay, num_guests)
