@@ -3,7 +3,7 @@ class ClientRefusedError(Exception):
 
 
 class RequestGeneratorError(Exception):
-    """Exception raised when there is a problem with the RequestGenerator"""
+    """Exception raised when there is a problem with the generation of a request"""
 
 
 class RoomUnavailableError(Exception):

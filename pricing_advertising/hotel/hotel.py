@@ -6,6 +6,7 @@ from pricing_advertising.exception.booking import ClientRefusedError, RoomUnavai
 from pricing_advertising.hotel.room import Room, RoomCategory
 from pricing_advertising.policies.pricing.policy import PricingPolicy
 from pricing_advertising.requests.request import Request
+from pricing_advertising.utils.constants import MAX_GUESTS
 
 
 class Hotel:
@@ -64,7 +65,7 @@ class Hotel:
         # Assumption: matching is indipendent from the price
         assignements = {}
         for request in requests:
-            if request.num_guests > 3:
+            if request.num_guests > MAX_GUESTS:
                 raise RoomUnavailableError("No room available for more than 3 guests")
 
             category = request.get_category()

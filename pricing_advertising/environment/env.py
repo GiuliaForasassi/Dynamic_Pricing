@@ -9,6 +9,7 @@ from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.policies.pricing.random_policy import RandomPricingPolicy
 from pricing_advertising.requests.request_generator import RequestGenerator
+from pricing_advertising.utils.constants import NUM_COEFFICIENTS
 
 # Register the PricingEnv environment with OpenAI Gym
 # gym.register(id="PricingEnv-v0", entry_point="pricing_advertising.environment.env:PricingEnv")
@@ -24,7 +25,6 @@ class PricingEnv(gym.Env):
 
         # Define the dimensions of the state and action spaces and other vars/structure data you need
         num_room_categories = len(RoomCategory)
-        num_coefficients = 4
         total_days = (end_simulation - start_simulation).days
 
         # Define the action and observation space
@@ -44,7 +44,7 @@ class PricingEnv(gym.Env):
         self.action_space = gym.spaces.Box(
             low=0,
             high=float("inf"),
-            shape=(num_room_categories, num_coefficients),
+            shape=(num_room_categories, NUM_COEFFICIENTS),
             dtype=np.float32,
         )
 
