@@ -8,6 +8,8 @@ MIN_GUESTS = 1
 MAX_GUESTS = 3
 # Number of Berstein Coefficients
 NUM_COEFFICIENTS = 4
+# Number of room categories
+NUM_CATEGORIES = 3
 
 # Factors
 VARIABILITY_MIN_MAX_PRICE = 0.2

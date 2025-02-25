@@ -21,6 +21,9 @@ class PricingEnv(gym.Env):
     metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}
 
     def __init__(self, start_simulation: date, end_simulation: date, hotel: Hotel) -> None:
+        # generatore di richieste --> batch di requests
+        # hotel
+
         super().__init__()
 
         # Define the dimensions of the state and action spaces and other vars/structure data you need

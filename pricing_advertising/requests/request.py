@@ -1,7 +1,7 @@
 from datetime import date
 from random import random
 
-from pricing_advertising.hotel.room import Room, RoomCategory
+from pricing_advertising.enums.enums import RoomCategory
 
 
 class Request:
@@ -10,7 +10,17 @@ class Request:
         self.days_stay = days_stay
         self.num_guests = num_guests
 
-    def accept(self, total_price: float, proposed_room: Room) -> bool:
+    def accept(self, total_price: float) -> bool:
+        """
+        Determines whether to accept the proposed room based on the total price.
+
+        Args:
+            total_price (float): The total price of the proposed room.
+            proposed_room (Room): The proposed room object.
+
+        Returns:
+            bool: True if the proposed room is accepted, False otherwise.
+        """
         if total_price < 100:
             return random() < 0.8  # True with 80% probability
         else:
@@ -38,3 +48,21 @@ class Request:
             return RoomCategory.CATEGORY2
         else:
             return RoomCategory.CATEGORY3
+
+    def get_t_reservation(self) -> date:
+        """
+        Retrieve the reservation date.
+
+        Returns:
+            date: The reservation date.
+        """
+        return self.t_reservation
+
+    def get_days_stay(self) -> int:
+        """
+        Retrieve the number of days of stay.
+
+        Returns:
+            int: The number of days of stay.
+        """
+        return self.days_stay

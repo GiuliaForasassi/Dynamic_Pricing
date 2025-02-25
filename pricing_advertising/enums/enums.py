@@ -1,4 +1,4 @@
-from pricing_advertising.enums.enum import BaseEnum
+from pricing_advertising.enums.base_enum import BaseEnum
 
 
 class RoomCategory(BaseEnum):

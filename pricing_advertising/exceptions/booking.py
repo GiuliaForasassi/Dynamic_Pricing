@@ -8,3 +8,11 @@ class RequestGeneratorError(Exception):
 
 class RoomUnavailableError(Exception):
     """Exception raised when no room is available for requested category"""
+
+
+class NotValidPeriodError(Exception):
+    """Exception raised when the end of the stay is greater than the total number of days or when start day is negative"""
+
+
+class NoneAlternativeError(Exception):
+    """Exception raised when there is no alternative room available"""

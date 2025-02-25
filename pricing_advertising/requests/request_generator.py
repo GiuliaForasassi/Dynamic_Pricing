@@ -3,7 +3,7 @@ from datetime import date, timedelta
 
 from scipy.stats import norm
 
-from pricing_advertising.exception.booking import RequestGeneratorError
+from pricing_advertising.exceptions.booking import RequestGeneratorError
 from pricing_advertising.requests.request import Request
 from pricing_advertising.utils.constants import (
     MAX_DAYS_STAY,
@@ -46,7 +46,7 @@ class RequestGenerator:
             requests.append(request)
         return requests
 
-    def sample_num_requests(self) -> int:
+    def sample_num_requests(self, size: int = 1) -> int:
         """
         Sample the number of requests based on a distribution and a minimum factor.
 
@@ -58,9 +58,10 @@ class RequestGenerator:
         Returns:
             int: The sampled number of requests, rounded to the nearest integer.
         """
+
         min_num_requests = MIN_NUM_REQUESTS_FACTOR * self.avg_num_requests
         # Sample the number of requests from the distribution provided
-        num_requests = max(self.distribution.rvs(), min_num_requests)
+        num_requests = max(self.distribution.rvs(size=size), min_num_requests)
         # Round to the nearest integer
         num_requests = round(num_requests)
         return num_requests
