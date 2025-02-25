@@ -37,6 +37,18 @@ class Hotel:
         )  # occupancy matrix: number of rooms occupied per category per day
 
     def check_availability(self, request: Request) -> bool:
+        """
+        Checks the availability of rooms for a given request.
+
+        Args:
+            request (Request): The request object containing the reservation details.
+
+        Returns:
+            bool: True if there is availability for the requested category and period, False otherwise.
+
+        Raises:
+            NotValidPeriodError: If the requested period is not valid.
+        """
         category = request.get_category()
         start_day = request.get_t_reservation()
         days_stay = request.get_days_stay()
