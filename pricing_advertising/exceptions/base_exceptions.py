@@ -1,23 +1,23 @@
-class BookingError(Exception):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class BaseBookingError(Exception):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
 
 
-class HotelError(Exception):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class BaseHotelError(Exception):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
 
 
-class RequestError(Exception):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class BaseRequestError(Exception):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
 
 
-class ImplementationError(Exception):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class BaseImplementationError(Exception):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
 
 
-class EnvError(Exception):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class BaseBaseEnvError(Exception):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)

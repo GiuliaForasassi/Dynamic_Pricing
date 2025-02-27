@@ -82,8 +82,14 @@ class Hotel:
         """
         return self.rooms[category]
 
-    @property
-    def category(self) -> RoomCategory:
-        """Return the room category based on the number of guests"""
-        self._category = RoomCategory(self.num_guests)
-        return self._category
+    def get_category(self, request: Request) -> RoomCategory:
+        """
+        Get the category of the room given the num_guests of the request.
+
+        Args:
+            request (Request): The request object containing the reservation details.
+
+        Returns:
+            RoomCategory: The category of the room requested.
+        """
+        return request.num_guests

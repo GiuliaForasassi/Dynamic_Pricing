@@ -1,53 +1,56 @@
 from datetime import date
 
 from pricing_advertising.exceptions.base_exceptions import (
-    BookingError,
-    EnvError,
-    HotelError,
-    ImplementationError,
-    RequestError,
+    BaseBookingError,
+    BaseEnvError,
+    BaseHotelError,
+    BaseImplementationError,
+    BaseRequestError,
 )
 
 
-class NotValidPeriodError(BookingError):
+# region Booking Errors
+class NotValidPeriodError(BaseBookingError):
     def __init__(
         self,
         start_period: date,
         end_period: date,
         start_simulation: date,
         end_simulation: date,
-        **kwargs,
     ) -> None:
         message = f"The provided period ({start_period}, {end_period}) is not valid. Period must be included within {start_simulation} and {end_simulation} days."
-        super().__init__(message=message, **kwargs)
+        super().__init__(message=message)
 
 
-class ClientRefusedError(BookingError):
+class ClientRefusedError(BaseBookingError):
     def __init__(self) -> None:
         message = "The client refused the offer."
         super().__init__(message=message)
 
 
-class CustomNotImplementedError(ImplementationError):
+# endregion
+
+
+class CustomNotImplementedError(BaseImplementationError):
     def __init__(self) -> None:
         message = "This method is not implemented yet."
         super().__init__(message=message)
 
 
-class RequestGeneratorError(RequestError):
+class RequestGeneratorError(BaseRequestError):
     def __init__(self, remaining_days: int) -> None:
         message = f"The {remaining_days} exceeds the total number of days."
         super().__init__(message=message)
 
 
-class RoomUnavailableError(HotelError):
+class RoomUnavailableError(BaseHotelError):
     """Exception raised when no room is available for requested category"""
 
 
-class NoneAlternativeError(HotelError):
+class NoneAlternativeError(BaseHotelError):
     """Exception raised when there is no alternative room available"""
 
 
-class EnvironmentInitializationError(EnvError):
+class EnvironmentInitializationError(BaseEnvError):
     """Exception raised when there is a problem during Environment
     service initialization"""
