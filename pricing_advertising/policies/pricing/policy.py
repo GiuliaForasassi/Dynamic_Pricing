@@ -8,6 +8,7 @@ from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.utils.bernstein_polynomial import bernstein_monotonic_decreasing_polynomial
 
 
+# TODO: da sistemare
 class PricingPolicy(ABC):
     def __init__(self, start_simulation: date, end_simulation: date):
         super().__init__()

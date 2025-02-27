@@ -13,8 +13,5 @@ class Room:
         self.room_id = room_id  # id of the room
         self.category = category  # category of the room
 
-    def get_room_id(self) -> int:
-        return self.room_id
-
-    def get_category(self) -> RoomCategory:
-        return self.category
+    def __str__(self) -> str:
+        return f"Room {self.room_id} ({self.category.name})"

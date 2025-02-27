@@ -8,6 +8,7 @@ from pricing_advertising.policies.pricing.policy import PricingPolicy
 from pricing_advertising.utils.constants import NUM_COEFFICIENTS, VARIABILITY_MIN_MAX_PRICE
 
 
+# TODO: DA SISTEMARE
 class RandomPricingPolicy(PricingPolicy):
     def __init__(self, start_simulation: date, end_simulation: date) -> None:
         super().__init__(start_simulation, end_simulation)

@@ -1,9 +1,9 @@
 import random
 from datetime import date, timedelta
 
-from scipy.stats import norm
+from scipy.stats import norm, rv_continuous
 
-from pricing_advertising.exceptions.booking import RequestGeneratorError
+from pricing_advertising.exceptions.exceptions import RequestGeneratorError
 from pricing_advertising.requests.request import Request
 from pricing_advertising.utils.constants import (
     MAX_DAYS_STAY,
@@ -15,7 +15,9 @@ from pricing_advertising.utils.constants import (
 
 
 class RequestGenerator:
-    def __init__(self, avg_num_requests: int, end_simulation: date, distribution: None) -> None:
+    def __init__(
+        self, avg_num_requests: int, end_simulation: date, distribution: rv_continuous | None = None
+    ) -> None:
         self.avg_num_requests = avg_num_requests
         self.end_simulation = end_simulation
 
@@ -37,16 +39,16 @@ class RequestGenerator:
         Returns:
             list[Request]: A list of generated requests.
         """
-        num_requests = self.sample_num_requests()
+        num_requests = self._sample_num_requests()
         # initialize the list of requests
         requests = []
         # generation of requests
         for _ in range(num_requests):
-            request = self.generate_request(today)
+            request = self._generate_request(today)
             requests.append(request)
         return requests
 
-    def sample_num_requests(self, size: int = 1) -> int:
+    def _sample_num_requests(self, size: int = 1) -> int:
         """
         Sample the number of requests based on a distribution and a minimum factor.
 
@@ -66,7 +68,7 @@ class RequestGenerator:
         num_requests = round(num_requests)
         return num_requests
 
-    def generate_request(self, today: date) -> Request:
+    def _generate_request(self, today: date) -> Request:
         """
         Generates a reservation request for a given date.
 
