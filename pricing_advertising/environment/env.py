@@ -46,6 +46,7 @@ class PricingEnv(gym.Env):
                 # TODO: remember to add seasonality
             }
         )
+
         # action space is coefficients of the Bernstein polynomial
         self.action_space = gym.spaces.Box(
             low=0,
@@ -62,15 +63,15 @@ class PricingEnv(gym.Env):
         self.hotel = hotel
 
         # Instantiate the request generator and acceptance model
-        request_generator: RequestGenerator
-        acceptance_model: SimpleAcceptanceModel
+        self.request_generator: RequestGenerator
+        self.acceptance_model: SimpleAcceptanceModel
         avg_num_requests = random.randint(MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS)
-        request_generator = RequestGenerator(
+        self.request_generator = RequestGenerator(
             avg_num_requests, end_simulation, distribution=None
-        )  # Generator of requests
-        acceptance_model = SimpleAcceptanceModel()  # Acceptance model
+        )
+        self.acceptance_model = SimpleAcceptanceModel()
 
-    def step(self, action):
+    def step(self, action) -> tuple:
         """
         Execute one time step within the environment.
 
@@ -84,6 +85,28 @@ class PricingEnv(gym.Env):
             - done (bool): Whether the episode has ended.
             - info (dict): Additional information about the environment.
         """
+
+        # Generate requests for the current day
+        requests = self.request_generator.generate_requests(self.today)
+
+        # Check if the requests can be accommodated
+        valid_mask = self._process_requests(requests)
+        valid_requests = self._apply_mask(valid_mask, requests)
+
+        # Propose prices to the customers
+        # prices = self._generate_prices(valid_requests)
+        prices = self._generate_random_prices(valid_requests)
+
+        # Accept or reject the requests
+        accepted_mask = self.acceptance_model._accept()
+        accepted_requests = self.apply_mask(accepted_mask, valid_requests)
+
+        # Calculate the revenue of accepted requests
+        reward = self._calculate_reward(prices, accepted_mask)
+        # Update the hotel occupancy
+        self._update_occupancy(accepted_requests)
+        # Update the demand
+        self._update_demand(requests)
         # Move to the next day
         self.today += timedelta(days=1)
         done = self.today >= self.end_simulation
@@ -115,6 +138,15 @@ class PricingEnv(gym.Env):
 
     # OTHER FUNCTIONS
     def _process_requests(self, requests: np.ndarray) -> np.ndarray:
+        """
+        Processes a batch of requests and returns a mask indicating the availability of rooms.
+
+        Args:
+            requests (np.ndarray): An array of requests where each request is an object that can be checked for availability.
+
+        Returns:
+            np.ndarray: An array of integers (0 or 1) where 1 indicates that the requested room or an alternative room is available, and 0 indicates that neither the requested room nor an alternative room is available.
+        """
         masks = []
         for request in requests:
             if not self.hotel.check_availability(request):
@@ -129,3 +161,40 @@ class PricingEnv(gym.Env):
 
     def _check_alternatives(self, request: Request) -> RoomCategory | None:
         return None
+
+    def _apply_mask(self, valid_mask: np.ndarray, requests: np.ndarray) -> np.ndarray:
+        """
+        Apply a mask to filter requests based on a validity mask.
+
+        Parameters:
+        valid_mask (np.ndarray): A boolean array indicating which requests are valid (0 or 1).
+        requests (np.ndarray): An array of requests to be filtered.
+
+        Returns:
+        np.ndarray: An array of requests that are valid according to the valid_mask.
+        """
+        return requests[valid_mask.astype(bool)]
+
+    # TODO: implement this function using Bernstein coeffients
+    def _generate_prices(self, valid_requests: np.ndarray) -> np.ndarray:
+        return np.zeros(len(valid_requests))
+
+    def _generate_random_prices(self, valid_requests: np.ndarray) -> np.ndarray:
+        """
+        Generate random prices for valid requests.
+
+        This method generates a random price between 50 and 200 for each valid request
+        using a uniform distribution.
+
+        Parameters:
+        valid_requests (np.ndarray): An array of valid requests for which prices need to be generated.
+
+        Returns:
+        np.ndarray: An array of randomly generated prices corresponding to each valid request.
+        """
+        prices = []
+        for _ in valid_requests:
+            rng = np.random.default_rng()
+            random_price = rng.uniform(50, 200)
+            prices.append(random_price)
+        return np.array(prices)

@@ -41,8 +41,8 @@ class RequestGenerator:
             np.ndarray[Request]: A list of generated requests.
         """
         num_requests = self._sample_num_requests()
-        # initialize the list of requests
         requests = []
+
         # generation of requests
         for _ in range(num_requests):
             request = self._generate_request(today)
@@ -63,8 +63,10 @@ class RequestGenerator:
         """
 
         min_num_requests = MIN_NUM_REQUESTS_FACTOR * self.avg_num_requests
+
         # Sample the number of requests from the distribution provided
         num_requests = max(self.distribution.rvs(size=size), min_num_requests)
+
         # Round to the nearest integer
         num_requests = round(num_requests)
         return num_requests
@@ -86,9 +88,11 @@ class RequestGenerator:
         remaining_days = (self.end_simulation - today).days
         if remaining_days <= 0:
             raise InvalidReservationWindowError(remaining_days=remaining_days)
+
         # reservation date is between today and the last day of the simulation
         t_reservation = today + timedelta(days=random.randint(1, remaining_days))
         days_stay = random.randint(1, min(MAX_DAYS_STAY, remaining_days))
+
         # number of guests can be 1, 2 or 3
         num_guests = random.randint(MIN_GUESTS, MAX_GUESTS)
         return Request(t_reservation, days_stay, num_guests)
