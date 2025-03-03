@@ -15,5 +15,8 @@ NUM_CATEGORIES = 3
 VARIABILITY_MIN_MAX_PRICE = 0.2
 MIN_NUM_REQUESTS_FACTOR = 0.2
 STD_FACTOR = 0.1
-
 TOTAL_PRICE_THRESHOLD = 100
+
+# Interval in the random function to generate the average number of requests
+MIN_AVG_NUM_REQUESTS = 4
+MAX_AVG_NUM_REQUESTS = 15

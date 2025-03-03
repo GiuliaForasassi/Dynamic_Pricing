@@ -5,17 +5,28 @@ from typing import ClassVar
 import gymnasium as gym
 import numpy as np
 
+from pricing_advertising.acceptance.simple_function import SimpleAcceptanceModel
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
+from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
-from pricing_advertising.utils.constants import NUM_COEFFICIENTS
+from pricing_advertising.utils.constants import (
+    MAX_AVG_NUM_REQUESTS,
+    MIN_AVG_NUM_REQUESTS,
+    NUM_COEFFICIENTS,
+)
 
 
 class PricingEnv(gym.Env):
     # Metadata is a required attribute for the environment
     metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}
 
-    def __init__(self, start_simulation: date, end_simulation: date, hotel: Hotel) -> None:
+    def __init__(
+        self,
+        start_simulation: date,
+        end_simulation: date,
+        hotel: Hotel,
+    ) -> None:
         super().__init__()
 
         # Define the dimensions of the state and action spaces and other vars/structure data you need
@@ -44,18 +55,35 @@ class PricingEnv(gym.Env):
         )
 
         # Initiliaze the state
-        self.today: date = start_simulation
-        self.start_simulation: date = start_simulation
-        self.end_simulation: date = end_simulation
+        self.today = start_simulation
+        self.start_simulation = start_simulation
+        self.end_simulation = end_simulation
         avg_num_requests: int
-        request_generator: RequestGenerator
-        self.hotel: Hotel = hotel
+        self.hotel = hotel
 
-        # Generator of requests
-        avg_num_requests = random.randint(4, 15)
-        request_generator = RequestGenerator(avg_num_requests, end_simulation, distribution=None)
+        # Instantiate the request generator and acceptance model
+        request_generator: RequestGenerator
+        acceptance_model: SimpleAcceptanceModel
+        avg_num_requests = random.randint(MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS)
+        request_generator = RequestGenerator(
+            avg_num_requests, end_simulation, distribution=None
+        )  # Generator of requests
+        acceptance_model = SimpleAcceptanceModel()  # Acceptance model
 
     def step(self, action):
+        """
+        Execute one time step within the environment.
+
+        Parameters:
+        action (object): An action provided by the environment.
+
+        Returns:
+        tuple: A tuple containing:
+            - observation (object): An observation of the environment.
+            - reward (float): The amount of reward returned after the previous action.
+            - done (bool): Whether the episode has ended.
+            - info (dict): Additional information about the environment.
+        """
         # Move to the next day
         self.today += timedelta(days=1)
         done = self.today >= self.end_simulation
@@ -65,6 +93,18 @@ class PricingEnv(gym.Env):
         return observation, reward, done, info
 
     def reset(self, seed=None):
+        """
+        Resets the environment to its initial state.
+
+        This method is called to reset the environment to its initial state at the beginning of an episode.
+        It also ensures that the randomness and reproducibility are controlled by calling the parent class's reset method.
+
+        Args:
+            seed (int, optional): An optional seed for the random number generator to ensure reproducibility. Defaults to None.
+
+        Returns:
+            tuple: A tuple containing the initial observation from the observation space and an empty dictionary for additional info.
+        """
         super().reset(seed=seed)  # requires this call to control randomness and reproducibility
 
         # Reset the state of the environment to the initial state
@@ -72,3 +112,11 @@ class PricingEnv(gym.Env):
 
         # Return the initial observation and info
         return self.observation_space.sample(), {}
+
+    # OTHER FUNCTIONS
+    def _process_requests(self, requests: np.array[Request]):
+        for request in requests:
+            if not self.hotel.check_availability(request):
+                return None
+            pass
+        pass
