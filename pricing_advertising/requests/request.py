@@ -9,6 +9,3 @@ class Request:
 
     def __str__(self) -> str:
         return f"Reservation: {self.t_reservation} | Stay: {self.days_stay} days | Guests: {self.num_guests}"
-
-    def __repr__(self):
-        return self.__str__()

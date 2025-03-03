@@ -1,9 +1,9 @@
+"""
 from datetime import date
 
 from pricing_advertising.environment.env import PricingEnv
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.policies.pricing.random_policy import RandomPricingPolicy
-
 
 def run_test_simulation() -> None:
     # Define simulation period
@@ -32,4 +32,4 @@ def run_test_simulation() -> None:
         if terminated or truncated:
             observation, info = env.reset()
     env.close()
-    print("Simulation completed")
+    print("Simulation completed")"""

@@ -16,13 +16,13 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
             beta (float): The sensitivity parameter that controls the steepness of the logistic function.
 
         Returns:
-            bool: True if the total price is accepted, False otherwise.
+            bool: True if the proposed price is accepted, False otherwise.
         """
-        acceptance_probability = self.logistic_function(proposed_price, reference_price, beta)
+        acceptance_probability = self._logistic_function(proposed_price, reference_price, beta)
         random_number = random.random()
         return random_number <= acceptance_probability
 
-    def logistic_function(
+    def _logistic_function(
         self, proposed_price: float, reference_price: float, beta: float
     ) -> float:
         """

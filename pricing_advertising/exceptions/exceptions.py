@@ -14,11 +14,9 @@ class NotValidPeriodError(BaseBookingError):
         self,
         start_period: date,
         end_period: date,
-        start_simulation: date,
-        end_simulation: date,
     ) -> None:
-        message = f"The provided period ({start_period}, {end_period}) is not valid. Period must be included within {start_simulation} and {end_simulation} days."
-        super().__init__(message=message)
+        message = f"The provided period ({start_period}, {end_period}) is not valid. Period must be included within the simulation period."
+        super().__init__(message)
 
 
 # endregion
@@ -27,7 +25,7 @@ class NotValidPeriodError(BaseBookingError):
 class InvalidReservationWindowError(BaseRequestError):
     def __init__(self, remaining_days: int) -> None:
         message = f"The {remaining_days} exceeds the total number of days."
-        super().__init__(message=message)
+        super().__init__(message)
 
 
 class RoomUnavailableError(BaseHotelError):

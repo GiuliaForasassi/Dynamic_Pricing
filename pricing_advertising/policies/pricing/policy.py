@@ -1,3 +1,4 @@
+"""
 from abc import ABC, abstractmethod
 from datetime import date
 
@@ -32,4 +33,4 @@ class PricingPolicy(ABC):
 
     @abstractmethod
     def select_price_coefficients(self, observation) -> np.ndarray:
-        pass
+        pass"""

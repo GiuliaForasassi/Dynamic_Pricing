@@ -83,6 +83,7 @@ ignore = [
     "ANN102",
     "D10",
     "RUF010",
+    "ANN002"
 ]
 
 [format]

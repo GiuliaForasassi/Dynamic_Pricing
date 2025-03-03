@@ -92,7 +92,7 @@ class PricingEnv(gym.Env):
         info = {}  # Placeholder for additional info
         return observation, reward, done, info
 
-    def reset(self, seed=None):
+    def reset(self, seed=None) -> tuple:
         """
         Resets the environment to its initial state.
 
@@ -114,9 +114,18 @@ class PricingEnv(gym.Env):
         return self.observation_space.sample(), {}
 
     # OTHER FUNCTIONS
-    def _process_requests(self, requests: np.array[Request]):
+    def _process_requests(self, requests: np.ndarray) -> np.ndarray:
+        masks = []
         for request in requests:
             if not self.hotel.check_availability(request):
-                return None
-            pass
-        pass
+                alternative_room = self._check_alternatives(request)
+                if alternative_room is None:
+                    masks.append(0)
+                else:
+                    masks.append(1)
+            else:
+                masks.append(1)
+        return np.array(masks)
+
+    def _check_alternatives(self, request: Request) -> RoomCategory | None:
+        return None

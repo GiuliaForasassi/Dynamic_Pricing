@@ -30,7 +30,7 @@ class RequestGenerator:
         else:
             self.distribution = distribution
 
-    def generate_requests(self, today: date) -> np.array[Request]:
+    def generate_requests(self, today: date) -> np.ndarray:
         """
         Generate a list of requests for a given date.
 
@@ -38,7 +38,7 @@ class RequestGenerator:
             today (date): The date for which to generate requests.
 
         Returns:
-            list[Request]: A list of generated requests.
+            np.ndarray[Request]: A list of generated requests.
         """
         num_requests = self._sample_num_requests()
         # initialize the list of requests
@@ -85,7 +85,7 @@ class RequestGenerator:
         """
         remaining_days = (self.end_simulation - today).days
         if remaining_days <= 0:
-            raise InvalidReservationWindowError("No more days available for reservations")
+            raise InvalidReservationWindowError(remaining_days=remaining_days)
         # reservation date is between today and the last day of the simulation
         t_reservation = today + timedelta(days=random.randint(1, remaining_days))
         days_stay = random.randint(1, min(MAX_DAYS_STAY, remaining_days))

@@ -1,4 +1,16 @@
 {
-    "editor.defaultFormatter": null,
-    "editor.formatOnSave": true
-}
+    "python.analysis.typeCheckingMode": "basic",
+    "python.testing.pytestArgs": [
+      "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+  
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll": false,
+      "source.organizeImports": true
+    },
+    "ruff.organizeImports": true
+  }

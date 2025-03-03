@@ -1,3 +1,4 @@
+"""
 import random
 from datetime import date
 
@@ -7,8 +8,7 @@ from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.policies.pricing.policy import PricingPolicy
 from pricing_advertising.utils.constants import NUM_COEFFICIENTS, VARIABILITY_MIN_MAX_PRICE
 
-
-# TODO: DA SISTEMARE
+ # TODO: DA SISTEMARE
 class RandomPricingPolicy(PricingPolicy):
     def __init__(self, start_simulation: date, end_simulation: date) -> None:
         super().__init__(start_simulation, end_simulation)
@@ -28,4 +28,4 @@ def generate_random_price(base_price: float) -> float:
     min_price = base_price * (1 - VARIABILITY_MIN_MAX_PRICE)
     max_price = base_price * (1 + VARIABILITY_MIN_MAX_PRICE)
     random_price = random.uniform(min_price, max_price)
-    return round(random_price, 2)
+    return round(random_price, 2)"""

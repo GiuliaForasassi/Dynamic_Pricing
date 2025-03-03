@@ -3,7 +3,7 @@ from scipy.special import comb
 
 
 # Define the Bernstein kth-basis polynomial
-def bernstein_basis_polynomial(k: int, M: int, x: np.ndarray | float) -> np.ndarray | float:  # noqa: ANN201
+def bernstein_basis_polynomial(k: int, M: int, x: np.ndarray | float) -> np.ndarray | float:
     """Calculate the Bernstein kth-basis polynomial ψk(x, M)."""
     return comb(M, k) * (x**k) * ((1 - x) ** (M - k))
 
