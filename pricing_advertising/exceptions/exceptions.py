@@ -4,7 +4,6 @@ from pricing_advertising.exceptions.base_exceptions import (
     BaseBookingError,
     BaseEnvError,
     BaseHotelError,
-    BaseImplementationError,
     BaseRequestError,
 )
 
@@ -22,22 +21,10 @@ class NotValidPeriodError(BaseBookingError):
         super().__init__(message=message)
 
 
-class ClientRefusedError(BaseBookingError):
-    def __init__(self) -> None:
-        message = "The client refused the offer."
-        super().__init__(message=message)
-
-
 # endregion
 
 
-class CustomNotImplementedError(BaseImplementationError):
-    def __init__(self) -> None:
-        message = "This method is not implemented yet."
-        super().__init__(message=message)
-
-
-class RequestGeneratorError(BaseRequestError):
+class InvalidReservationWindowError(BaseRequestError):
     def __init__(self, remaining_days: int) -> None:
         message = f"The {remaining_days} exceeds the total number of days."
         super().__init__(message=message)

@@ -1,7 +1,5 @@
 from abc import ABC, abstractmethod
 
-from pricing_advertising.exceptions.exceptions import NotImplementedError
-
 
 class ABCAcceptanceModel(ABC):
     """

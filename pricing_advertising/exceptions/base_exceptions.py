@@ -13,11 +13,6 @@ class BaseRequestError(Exception):
         super().__init__(*args)
 
 
-class BaseImplementationError(Exception):
-    def __init__(self, *args) -> None:
-        super().__init__(*args)
-
-
-class BaseBaseEnvError(Exception):
+class BaseEnvError(Exception):
     def __init__(self, *args) -> None:
         super().__init__(*args)

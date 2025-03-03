@@ -1,9 +1,10 @@
 import random
 from datetime import date, timedelta
 
+import numpy as np
 from scipy.stats import norm, rv_continuous
 
-from pricing_advertising.exceptions.exceptions import RequestGeneratorError
+from pricing_advertising.exceptions.exceptions import InvalidReservationWindowError
 from pricing_advertising.requests.request import Request
 from pricing_advertising.utils.constants import (
     MAX_DAYS_STAY,
@@ -29,7 +30,7 @@ class RequestGenerator:
         else:
             self.distribution = distribution
 
-    def generate_requests(self, today: date) -> list[Request]:
+    def generate_requests(self, today: date) -> np.array[Request]:
         """
         Generate a list of requests for a given date.
 
@@ -46,7 +47,7 @@ class RequestGenerator:
         for _ in range(num_requests):
             request = self._generate_request(today)
             requests.append(request)
-        return requests
+        return np.array(requests)
 
     def _sample_num_requests(self, size: int = 1) -> int:
         """
@@ -84,7 +85,7 @@ class RequestGenerator:
         """
         remaining_days = (self.end_simulation - today).days
         if remaining_days <= 0:
-            raise RequestGeneratorError("No more days available for reservations")
+            raise InvalidReservationWindowError("No more days available for reservations")
         # reservation date is between today and the last day of the simulation
         t_reservation = today + timedelta(days=random.randint(1, remaining_days))
         days_stay = random.randint(1, min(MAX_DAYS_STAY, remaining_days))

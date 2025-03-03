@@ -55,7 +55,7 @@ class Hotel:
         Raises:
             NotValidPeriodError: If the requested period is not valid.
         """
-        category = self._category
+        category = self.get_category(request)
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + days_stay

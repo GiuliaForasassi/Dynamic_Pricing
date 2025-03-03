@@ -7,23 +7,15 @@ import numpy as np
 
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
-from pricing_advertising.policies.pricing.random_policy import RandomPricingPolicy
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import NUM_COEFFICIENTS
 
-# Register the PricingEnv environment with OpenAI Gym
-# gym.register(id="PricingEnv-v0", entry_point="pricing_advertising.environment.env:PricingEnv")
 
-
-# Implement the PricingEnv environment as a subclass of gym.Env
 class PricingEnv(gym.Env):
     # Metadata is a required attribute for the environment
     metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}
 
     def __init__(self, start_simulation: date, end_simulation: date, hotel: Hotel) -> None:
-        # generatore di richieste --> batch di requests
-        # hotel
-
         super().__init__()
 
         # Define the dimensions of the state and action spaces and other vars/structure data you need
@@ -55,58 +47,28 @@ class PricingEnv(gym.Env):
         self.today: date = start_simulation
         self.start_simulation: date = start_simulation
         self.end_simulation: date = end_simulation
+        avg_num_requests: int
+        request_generator: RequestGenerator
         self.hotel: Hotel = hotel
 
-        # Initialize the revenue
+        # Generator of requests
+        avg_num_requests = random.randint(4, 15)
+        request_generator = RequestGenerator(avg_num_requests, end_simulation, distribution=None)
 
-    # STEP FUNCTION
-    # Execute 1 time step within the environment
-    def step(self, action: gym.spaces.Box):
-        # If no acions is provided, sample one from the policy
-
-        # here use bernstein coefficients
-        # theta = ....
-        #
-
-        # Generate clients
-        num_requests = random.randint(4, 15)
-        # client_generator = RequestGenerator(num_clients, self.end_simulation)
-        requests = RequestGenerator.generate_requests(self.today)
-
-        # Generate the price vector using the Bernstein coefficients
-        # TODO: dati i client, genera il vettore dei prezzi
-        # prices = self.generate_price_vector(theta, len(clients))
-        # TODO: booking attempt
-
-        # Client booking process
-
-        # accepted_clients = .....
-        # TODO: calcolo reward
-        reward = ...
-        # TODO: aggiorno info: tempo, occupancy ecc
-
+    def step(self, action):
         # Move to the next day
         self.today += timedelta(days=1)
         done = self.today >= self.end_simulation
-        # return observation, reward, info
-        return self.observation_space.sample, reward, done, {}
+        observation = self.observation_space.sample()
+        reward = 0  # Placeholder for reward calculation
+        info = {}  # Placeholder for additional info
+        return observation, reward, done, info
 
-    # RESET FUNCTION
-    # Reset the environment to its initial state and return the initial observations
     def reset(self, seed=None):
         super().reset(seed=seed)  # requires this call to control randomness and reproducibility
-        # TODO: reset occupancy hotel
-        # TODO: reset demand
-        # TODO: reset time horizon
-        # TODO: inizializzare reward neg a quelli che cancellano
-        # return observation, info
-        pass
 
-    # OTHER FUNCTIONS
+        # Reset the state of the environment to the initial state
+        self.today = self.start_simulation
 
-    # Translate the environment's state into an observation
-    def get_obs(self):
-        occupancy = self.hotel.get_occupancy()
-
-    def get_info(self):
-        pass
+        # Return the initial observation and info
+        return self.observation_space.sample(), {}
