@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -24,11 +24,15 @@ class Hotel:
     def __init__(
         self,
         total_days: int,
+        start_simulation: date,
+        end_simulation: date,
         num_category1_rooms: int,
         num_category2_rooms: int,
         num_category3_rooms: int,
     ) -> None:
         self.total_days = total_days  # total number of simulation days
+        self.start_simulation = start_simulation
+        self.end_simulation = end_simulation
 
         self.rooms = NumHotelRooms(
             num_category1_rooms=num_category1_rooms,
@@ -61,8 +65,13 @@ class Hotel:
         end_day = start_day + timedelta(days=days_stay)
 
         # Check if the period is valid
-        if start_day.day < 0 or end_day.day > self.total_days:
-            raise NotValidPeriodError(start_period=start_day, end_period=end_day)
+        if start_day < self.start_simulation or end_day > self.end_simulation:
+            raise NotValidPeriodError(
+                start_period=start_day,
+                end_period=end_day,
+                start_simulation=self.start_simulation,
+                end_simulation=self.end_simulation,
+            )
 
         # Check if there is a room available for the requested category and period
         total_rooms_for_category = self.get_num_rooms_per_category(category)
@@ -98,3 +107,19 @@ class Hotel:
             RoomCategory: The category of the room requested.
         """
         return RoomCategory(request.num_guests)
+
+    def update_occupancy(self, requests: np.ndarray) -> None:
+        """
+        Updates the occupancy matrix based on the accepted requests.
+
+        Args:
+            requests (np.ndarray): An array of requests that have been accepted.
+        """
+        for request in requests:
+            category = self.get_category(request)
+            start_day = request.t_reservation
+            days_stay = request.days_stay
+            end_day = start_day + timedelta(days=days_stay)
+            category_index = category.value
+
+            self.occupancy[category_index, start_day.day : end_day.day] += 1

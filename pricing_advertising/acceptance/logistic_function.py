@@ -30,7 +30,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
 
         Parameters:
         proposed_price (float): The price being proposed.
-        reference_price (float): The reference price to compare against.
+        reference_price (float): The price that a customer expects to pay based on their own perception of value, past experiences, or competitor prices.
         beta (float): The sensitivity parameter that controls the steepness of the logistic function.
 
         Returns:

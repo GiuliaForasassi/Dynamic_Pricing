@@ -5,6 +5,8 @@ from pricing_advertising.environment.env import PricingEnv
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.policies.pricing.random_policy import RandomPricingPolicy
 
+# Assuming that the simulation start the first of the month
+
 def run_test_simulation() -> None:
     # Define simulation period
     start_simulation = date(2025, 1, 1)

@@ -14,8 +14,10 @@ class NotValidPeriodError(BaseBookingError):
         self,
         start_period: date,
         end_period: date,
+        start_simulation: date,
+        end_simulation: date,
     ) -> None:
-        message = f"The provided period ({start_period}, {end_period}) is not valid. Period must be included within the simulation period."
+        message = f"The provided period ({start_period}, {end_period}) is not valid. Period must be included within ({start_simulation}, {end_simulation})."
         super().__init__(message)
 
 

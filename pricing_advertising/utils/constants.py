@@ -20,3 +20,7 @@ TOTAL_PRICE_THRESHOLD = 100
 # Interval in the random function to generate the average number of requests
 MIN_AVG_NUM_REQUESTS = 4
 MAX_AVG_NUM_REQUESTS = 15
+
+# Interval in the random function to generate the price
+MIN_PRICE = 50
+MAX_PRICE = 200
