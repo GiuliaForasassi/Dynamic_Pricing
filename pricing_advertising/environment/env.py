@@ -97,14 +97,14 @@ class PricingEnv(gym.Env):
 
         # Generate prices for each day of valid requests
         # prices = self._generate_prices(valid_requests)
-        prices = self._generate_random_prices(valid_requests)
+        (tot_prices, daily_prices) = self._generate_random_prices(valid_requests)
 
         # Accept or reject the requests
-        accepted_mask = self._accept(prices)
+        accepted_mask = self._accept(tot_prices)
         accepted_requests = self._apply_mask(accepted_mask, valid_requests)
 
         # Calculate the revenue of accepted requests
-        reward = self._calculate_reward(prices, accepted_mask)
+        reward = self._calculate_reward(tot_prices, accepted_mask)
 
         # Update the hotel occupancy
         self._update_occupancy(accepted_requests)
@@ -184,28 +184,24 @@ class PricingEnv(gym.Env):
     def _generate_prices(self, valid_requests: np.ndarray):
         pass
 
-    # REVIEW THIS METHOD: I have keep track of the daily prices for each request in order to have a feedback from the environment
-    def _generate_random_prices(self, valid_requests: np.ndarray) -> np.ndarray:
-        """
-        Generate daily random prices for valid requests.
-
-        Parameters:
-        valid_requests (np.ndarray): An array of valid requests for which prices need to be generated.
-
-        Returns:
-        np.ndarray: An array of randomly generated prices corresponding to each valid request.
-        """
-        prices = []
+    def _generate_random_prices(
+        self, valid_requests: np.ndarray
+    ) -> tuple[np.ndarray, list[list[float]]]:
+        total_prices = []
+        all_daily_prices = []
         valid_requests_list: list[Request] = valid_requests.tolist()  # type: ignore
         for request in valid_requests_list:
+            daily_prices = []
             total_price = 0
             reservation_days = request.get_total_reservation_days()
             for _ in range(reservation_days):
                 rng = np.random.default_rng()
                 random_daily_price = rng.uniform(MIN_PRICE, MAX_PRICE)
+                daily_prices.append(random_daily_price)
                 total_price += random_daily_price
-            prices.append(total_price)
-        return np.array(prices)
+            all_daily_prices.append(daily_prices)
+            total_prices.append(total_price)
+        return np.array(total_prices), all_daily_prices
 
     def _calculate_reward(self, prices: np.ndarray, accepted_mask: np.ndarray) -> float:
         """
