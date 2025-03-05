@@ -94,10 +94,11 @@ class PricingEnv(gym.Env):
         # Check if the requests can be accommodated
         valid_mask = self._process_requests(requests)
         valid_requests = self._apply_mask(valid_mask, requests)
+        valid_requests_list = list(valid_requests)
 
         # Generate prices for each day of valid requests
         # prices = self._generate_prices(valid_requests)
-        prices = self._generate_random_prices(valid_requests)
+        prices = self._generate_random_prices(valid_requests_list)
 
         # Accept or reject the requests
         accepted_mask = self._accept(prices)
@@ -184,7 +185,7 @@ class PricingEnv(gym.Env):
     def _generate_prices(self, valid_requests: np.ndarray):
         pass
 
-    def _generate_random_prices(self, valid_requests: np.ndarray) -> np.ndarray:
+    def _generate_random_prices(self, valid_requests: list[Request]) -> np.ndarray:
         """
         Generate daily random prices for valid requests.
 
@@ -225,6 +226,7 @@ class PricingEnv(gym.Env):
         Parameters:
         accepted_requests (np.ndarray): An array of accepted requests.
         """
+        accepted_requests.tolist()
         for request in accepted_requests:
             self.hotel.update_occupancy(request)
 

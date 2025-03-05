@@ -108,12 +108,12 @@ class Hotel:
         """
         return RoomCategory(request.num_guests)
 
-    def update_occupancy(self, requests: np.ndarray) -> None:
+    def update_occupancy(self, requests: list[Request]) -> None:
         """
         Updates the occupancy matrix based on the accepted requests.
 
         Args:
-            requests (np.ndarray): An array of requests that have been accepted.
+            requests (list): A list of requests that have been accepted.
         """
         for request in requests:
             category = self.get_category(request)
