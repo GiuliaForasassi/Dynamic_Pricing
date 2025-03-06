@@ -22,3 +22,22 @@ class ABCAcceptanceModel(ABC):
     @abstractmethod
     def _accept(self, total_price: float) -> bool:
         raise NotImplementedError("The _accept method must be implemented by the subclass.")
+
+    def accept_daily_price(self, daily_price: float) -> bool:
+        """
+        Determines whether the given daily price is acceptable.
+
+        Args:
+            daily_price (float): The daily price to evaluate.
+
+        Returns:
+            bool: True if the daily price is acceptable, False otherwise.
+        """
+        result = self._accept_daily_price(daily_price)
+        return result
+
+    @abstractmethod
+    def _accept_daily_price(self, daily_price: float) -> bool:
+        raise NotImplementedError(
+            "The _accept_daily_price method must be implemented by the subclass."
+        )

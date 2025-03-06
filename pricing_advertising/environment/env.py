@@ -97,14 +97,14 @@ class PricingEnv(gym.Env):
 
         # Generate prices for each day of valid requests
         # prices = self._generate_prices(valid_requests)
-        (tot_prices, daily_prices) = self._generate_random_prices(valid_requests)
+        daily_prices = self._generate_random_prices(valid_requests)
 
         # Accept or reject the requests
-        accepted_mask = self._accept(tot_prices)
+        accepted_mask = self._evaluate_prices(daily_prices)
         accepted_requests = self._apply_mask(accepted_mask, valid_requests)
 
         # Calculate the revenue of accepted requests
-        reward = self._calculate_reward(tot_prices, accepted_mask)
+        reward = self._calculate_reward(tot_prices, accepted_mask)  # to fix
 
         # Update the hotel occupancy
         self._update_occupancy(accepted_requests)
@@ -184,10 +184,8 @@ class PricingEnv(gym.Env):
     def _generate_prices(self, valid_requests: np.ndarray):
         pass
 
-    def _generate_random_prices(
-        self, valid_requests: np.ndarray
-    ) -> tuple[np.ndarray, list[list[float]]]:
-        total_prices = []
+    # TO FIX
+    def _generate_random_prices(self, valid_requests: np.ndarray):
         all_daily_prices = []
         valid_requests_list: list[Request] = valid_requests.tolist()  # type: ignore
         for request in valid_requests_list:
@@ -200,8 +198,31 @@ class PricingEnv(gym.Env):
                 daily_prices.append(random_daily_price)
                 total_price += random_daily_price
             all_daily_prices.append(daily_prices)
-            total_prices.append(total_price)
-        return np.array(total_prices), all_daily_prices
+
+        return all_daily_prices
+
+    def _generate_random_price(self, request: Request) -> float:
+        pass
+
+    def _evaluate_prices(self, daily_prices: list[list[float]]) -> np.ndarray:
+        """
+        Evaluate the acceptance of daily prices.
+
+        This method takes a list of daily prices, evaluates each request's total price,
+        and determines whether the total price is accepted based on the acceptance model.
+
+        Args:
+            daily_prices (list[list]): A list of lists where each inner list contains prices for a single request.
+
+        Returns:
+            np.ndarray: An array of boolean values indicating whether each request's total price is accepted.
+        """
+        accepted_prices = []
+        for request in daily_prices:
+            total_price = sum(request)
+            flag = self.acceptance_model.accept(total_price)
+            accepted_prices.append(flag)
+        return np.array(accepted_prices)
 
     def _calculate_reward(self, prices: np.ndarray, accepted_mask: np.ndarray) -> float:
         """
