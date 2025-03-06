@@ -100,7 +100,7 @@ class PricingEnv(gym.Env):
         daily_prices = self._generate_random_prices(valid_requests)
 
         # Accept or reject the requests
-        accepted_mask = self._evaluate_prices(daily_prices)
+        (accepted_mask, tot_prices) = self._evaluate_prices(daily_prices)
         accepted_requests = self._apply_mask(accepted_mask, valid_requests)
 
         # Calculate the revenue of accepted requests
@@ -223,25 +223,27 @@ class PricingEnv(gym.Env):
             requests_prices.append(request_prices)
         return requests_prices
 
-    def _evaluate_prices(self, daily_prices: list[list[float]]) -> np.ndarray:
+    def _evaluate_prices(self, daily_prices: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
         """
-        Evaluate the acceptance of daily prices.
-
-        This method takes a list of daily prices, evaluates each request's total price,
-        and determines whether the total price is accepted based on the acceptance model.
+        Evaluates the given daily prices and determines which prices are accepted.
 
         Args:
-            daily_prices (list[list]): A list of lists where each inner list contains prices for a single request.
+            daily_prices (list[list[float]]): A list of lists where each inner list contains daily prices.
 
         Returns:
-            np.ndarray: An array of boolean values indicating whether each request's total price is accepted.
+            tuple[np.ndarray, np.ndarray]: A tuple containing two numpy arrays:
+                - The first array contains boolean flags indicating whether each total price was accepted.
+                - The second array contains the total prices for each request.
         """
         accepted_prices = []
+        total_prices = []
         for request in daily_prices:
             total_price = sum(request)
             flag = self.acceptance_model.accept(total_price)
+
             accepted_prices.append(flag)
-        return np.array(accepted_prices)
+            total_prices.append(total_price)
+        return np.array(accepted_prices), np.array(total_prices)
 
     def _calculate_reward(self, prices: np.ndarray, accepted_mask: np.ndarray) -> float:  # to fix
         """
