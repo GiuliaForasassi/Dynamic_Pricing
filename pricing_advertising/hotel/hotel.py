@@ -108,18 +108,21 @@ class Hotel:
         """
         return RoomCategory(request.num_guests)
 
-    def update_occupancy(self, requests: list[Request]) -> None:
+    def update_occupancy(self, request: Request) -> None:
         """
-        Updates the occupancy matrix based on the accepted requests.
+        Updates the occupancy matrix for a specified category and period based on the given request.
 
         Args:
-            requests (list): A list of requests that have been accepted.
-        """
-        for request in requests:
-            category = self.get_category(request)
-            start_day = request.t_reservation
-            days_stay = request.days_stay
-            end_day = start_day + timedelta(days=days_stay)
-            category_index = category.value
+            request (Request): The request object containing reservation details.
 
-            self.occupancy[category_index, start_day.day : end_day.day] += 1
+        Returns:
+            None
+        """
+        category = self.get_category(request)
+        start_day = request.t_reservation
+        days_stay = request.days_stay
+        end_day = start_day + timedelta(days=days_stay)
+        category_index = category.value
+
+        # Update the occupancy matrix for the specified category and period
+        self.occupancy[category_index, start_day.day : end_day.day] += 1
