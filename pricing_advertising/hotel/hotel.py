@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.exceptions.exceptions import (
     NotValidPeriodError,
+    RoomUnavailableError,
 )
 from pricing_advertising.requests.request import Request
 from pricing_advertising.utils.constants import NUM_CATEGORIES
@@ -122,7 +123,31 @@ class Hotel:
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
-        category_index = category.value
+        category_idx = category.value
+
+        if days_stay <= 0:
+            raise ValueError("The number of days for the stay must be greater than 0.")
+        if category_idx < 0 or category_idx >= self.occupancy.shape[0]:
+            raise IndexError("Invalid category index.")
+        if start_day < self.start_simulation or end_day > self.end_simulation:
+            raise NotValidPeriodError(
+                start_period=start_day,
+                end_period=end_day,
+                start_simulation=self.start_simulation,
+                end_simulation=self.end_simulation,
+            )
+
+        # Ensure index is within bounds and converto to 0-based index
+        max_days = self.occupancy.shape[1]
+        start_idx = start_day.day - 1
+        end_idx = min(end_day.day - 1, max_days)
+
+        # Check capacity for each day of the period
+        if np.any(
+            self.occupancy[category_idx, start_idx:end_idx]
+            >= self.get_num_rooms_per_category(category)
+        ):
+            raise RoomUnavailableError(category=category_idx)
 
         # Update the occupancy matrix for the specified category and period
-        self.occupancy[category_index, start_day.day : end_day.day] += 1
+        self.occupancy[category_idx, start_idx:end_idx] += 1

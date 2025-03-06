@@ -31,7 +31,9 @@ class InvalidReservationWindowError(BaseRequestError):
 
 
 class RoomUnavailableError(BaseHotelError):
-    """Exception raised when no room is available for requested category"""
+    def __init__(self, category: int) -> None:
+        message = f"Exceeded the number of available rooms for category {category}."
+        super().__init__(message)
 
 
 class NoneAlternativeError(BaseHotelError):
