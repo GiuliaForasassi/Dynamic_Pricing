@@ -184,25 +184,44 @@ class PricingEnv(gym.Env):
     def _generate_prices(self, valid_requests: np.ndarray):
         pass
 
-    # TO FIX
-    def _generate_random_prices(self, valid_requests: np.ndarray):
-        all_daily_prices = []
-        valid_requests_list: list[Request] = valid_requests.tolist()  # type: ignore
-        for request in valid_requests_list:
-            daily_prices = []
-            total_price = 0
-            reservation_days = request.get_total_reservation_days()
-            for _ in range(reservation_days):
-                rng = np.random.default_rng()
-                random_daily_price = rng.uniform(MIN_PRICE, MAX_PRICE)
-                daily_prices.append(random_daily_price)
-                total_price += random_daily_price
-            all_daily_prices.append(daily_prices)
+    def _generate_random_prices_for_request(self, request: Request) -> list[float]:
+        """
+        Generate a list of random prices for each day of a reservation request.
 
-        return all_daily_prices
+        This method generates random daily prices within the range defined by
+        MIN_PRICE and MAX_PRICE for the total number of reservation days specified
+        in the request.
 
-    def _generate_random_price(self, request: Request) -> float:
-        pass
+        Args:
+            request (Request): The reservation request object containing details
+                               about the reservation.
+
+        Returns:
+            list[float]: A list of random daily prices for the reservation period.
+        """
+        request_prices = []
+        reservation_days = request.get_total_reservation_days()
+        for _ in range(reservation_days):
+            rng = np.random.default_rng()
+            random_daily_price = rng.uniform(MIN_PRICE, MAX_PRICE)
+            request_prices.append(random_daily_price)
+        return request_prices
+
+    def _generate_random_prices(self, valid_requests: np.ndarray) -> list[list[float]]:
+        """
+        Generate random prices for a list of valid requests.
+
+        Args:
+            valid_requests (np.ndarray): An array of valid requests for which prices need to be generated.
+
+        Returns:
+            list[list[float]]: A list of lists, where each inner list contains the generated prices for a corresponding request.
+        """
+        requests_prices = []
+        for request in valid_requests:
+            request_prices = self._generate_random_prices_for_request(request)
+            requests_prices.append(request_prices)
+        return requests_prices
 
     def _evaluate_prices(self, daily_prices: list[list[float]]) -> np.ndarray:
         """
@@ -256,18 +275,3 @@ class PricingEnv(gym.Env):
         requests (np.ndarray): An array of requests generated for the current day.
         """
         pass
-
-    def _accept(self, prices: np.ndarray) -> np.ndarray:
-        """
-        Accept or reject the proposed prices based on the acceptance model.
-
-        Parameters:
-        prices (np.ndarray): An array of prices proposed to the customers.
-
-        Returns:
-        np.ndarray: A boolean array indicating which requests were accepted.
-        """
-        accepted_prices = []
-        for price in prices:
-            accepted_prices.append(self.acceptance_model.accept(price))
-        return np.array(accepted_prices)
