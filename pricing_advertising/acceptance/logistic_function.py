@@ -6,7 +6,11 @@ from pricing_advertising.acceptance.acceptance import ABCAcceptanceModel
 
 
 class LogisticAcceptanceModel(ABCAcceptanceModel):
-    def _accept(self, proposed_price: float, reference_price: float, beta: float) -> bool:
+    def __init__(self, reference_price: float, beta: float) -> None:
+        self.reference_price = reference_price
+        self.beta = beta
+
+    def _accept(self, proposed_price: float) -> bool:
         """
         Determines whether a given total price is accepted based on a threshold.
 
@@ -18,7 +22,9 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         Returns:
             bool: True if the proposed price is accepted, False otherwise.
         """
-        acceptance_probability = self._logistic_function(proposed_price, reference_price, beta)
+        acceptance_probability = self._logistic_function(
+            reference_price=self.reference_price, proposed_price=proposed_price, beta=self.beta
+        )
         random_number = random.random()
         return random_number <= acceptance_probability
 

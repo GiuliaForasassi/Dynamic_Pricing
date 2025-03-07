@@ -1,24 +1,15 @@
 from datetime import date, timedelta
 
 import numpy as np
-from pydantic import BaseModel, Field
 
 from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.exceptions.exceptions import (
     NotValidPeriodError,
     RoomUnavailableError,
 )
+from pricing_advertising.models.models import NumHotelRooms
 from pricing_advertising.requests.request import Request
 from pricing_advertising.utils.constants import NUM_CATEGORIES
-
-
-class NumHotelRooms(BaseModel):
-    """Number of rooms per category"""
-
-    num_category1_rooms: int = Field(description="Number of category 1 rooms")
-    num_category2_rooms: int = Field(description="Number of category 2 rooms")
-    num_category3_rooms: int = Field(description="Number of category 3 rooms")
-    num_total_rooms: int = Field(description="Total number of rooms")
 
 
 class Hotel:
@@ -60,13 +51,20 @@ class Hotel:
         Raises:
             NotValidPeriodError: If the requested period is not valid.
         """
+        # Get the category and period
         category = self.get_category(request)
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
+        total_rooms_for_category = self.get_num_rooms_per_category(category)
+
+        # Get the corresppnding indexes
+        category_idx = category.value
+        start_idx = (start_day - self.start_simulation).days
+        end_idx = (end_day - self.start_simulation).days
 
         # Check if the period is valid
-        if start_day < self.start_simulation or end_day > self.end_simulation:
+        if start_day < self.start_simulation or end_day >= self.end_simulation:
             raise NotValidPeriodError(
                 start_period=start_day,
                 end_period=end_day,
@@ -74,15 +72,8 @@ class Hotel:
                 end_simulation=self.end_simulation,
             )
 
-        # Check if there is a room available for the requested category and period
-        total_rooms_for_category = self.get_num_rooms_per_category(category)
-        category_index = category.value
-
         return bool(
-            np.all(
-                self.occupancy[category_index, start_day.day : end_day.day]
-                < total_rooms_for_category
-            )
+            np.all(self.occupancy[category_idx, start_idx:end_idx] < total_rooms_for_category)
         )
 
     def get_num_rooms_per_category(self, category: RoomCategory) -> int:
@@ -123,7 +114,12 @@ class Hotel:
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
+
         category_idx = category.value
+        start_idx = (start_day - self.start_simulation).days
+        end_idx = (end_day - self.start_simulation).days
+
+        total_rooms_for_category = self.get_num_rooms_per_category(category)
 
         if days_stay <= 0:
             raise ValueError("The number of days for the stay must be greater than 0.")
@@ -137,16 +133,8 @@ class Hotel:
                 end_simulation=self.end_simulation,
             )
 
-        # Ensure index is within bounds and converto to 0-based index
-        max_days = self.occupancy.shape[1]
-        start_idx = start_day.day - 1
-        end_idx = min(end_day.day - 1, max_days)
-
         # Check capacity for each day of the period
-        if np.any(
-            self.occupancy[category_idx, start_idx:end_idx]
-            >= self.get_num_rooms_per_category(category)
-        ):
+        if np.any(self.occupancy[category_idx, start_idx:end_idx] >= total_rooms_for_category):
             raise RoomUnavailableError(category=category_idx)
 
         # Update the occupancy matrix for the specified category and period
