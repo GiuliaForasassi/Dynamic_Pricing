@@ -34,9 +34,7 @@ class Hotel:
         )
 
         # matrix of shape (num_categories, total_days) to keep track of the occupancy
-        self.occupancy = np.zeros(
-            (NUM_CATEGORIES, total_days), dtype=int
-        )  # occupancy matrix: number of rooms occupied per category per day
+        self.occupancy = np.zeros((NUM_CATEGORIES, total_days), dtype=int)
 
     def check_availability(self, request: Request) -> bool:
         """
@@ -52,7 +50,7 @@ class Hotel:
             NotValidPeriodError: If the requested period is not valid.
         """
         # Get the category and period
-        category = self.get_category(request)
+        category = request.get_category()
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
@@ -86,19 +84,7 @@ class Hotel:
         Returns:
             int: The number of rooms available in the specified category.
         """
-        return getattr(self.rooms, f"num_{category.name.lower()}_rooms")
-
-    def get_category(self, request: Request) -> RoomCategory:
-        """
-        Get the category of the room given the num_guests of the request.
-
-        Args:
-            request (Request): The request object containing the reservation details.
-
-        Returns:
-            RoomCategory: The category of the room requested.
-        """
-        return RoomCategory(request.num_guests)
+        return getattr(self.rooms, f"num_{category.value}_rooms")
 
     def update_occupancy(self, request: Request) -> None:
         """
@@ -110,19 +96,24 @@ class Hotel:
         Returns:
             None
         """
-        category = self.get_category(request)
+        # Get the category and period
+        category = request.get_category()
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
 
+        # Get the corresponding indexes
         category_idx = category.value
         start_idx = (start_day - self.start_simulation).days
         end_idx = (end_day - self.start_simulation).days
 
         total_rooms_for_category = self.get_num_rooms_per_category(category)
 
+        # Check if the request period is valid and the category index is within bounds
         if days_stay <= 0:
-            raise ValueError("The number of days for the stay must be greater than 0.")
+            raise ValueError(
+                "The number of days for the stay must be greater than 0. Received days_stay: {days_stay}"
+            )
         if category_idx < 0 or category_idx >= self.occupancy.shape[0]:
             raise IndexError("Invalid category index.")
         if start_day < self.start_simulation or end_day > self.end_simulation:

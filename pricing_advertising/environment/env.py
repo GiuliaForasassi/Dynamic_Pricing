@@ -71,7 +71,13 @@ class PricingEnv(gym.Env):
         self.request_generator = RequestGenerator(
             avg_num_requests, end_simulation, distribution=None
         )
-        self.acceptance_model = SimpleAcceptanceModel()
+        self.acceptance_model = SimpleAcceptanceModel(
+            threshold={
+                RoomCategory.CATEGORY1: 100,
+                RoomCategory.CATEGORY2: 150,
+                RoomCategory.CATEGORY3: 200,
+            }
+        )
 
     def step(self, action) -> tuple:
         """
@@ -238,7 +244,7 @@ class PricingEnv(gym.Env):
         total_prices = []
         for request in daily_prices:
             total_price = sum(request)
-            flag = self.acceptance_model.accept(total_price)
+            flag = self.acceptance_model.accept(total_price, request)  # type: ignore
 
             accepted_prices.append(flag)
             total_prices.append(total_price)

@@ -1,11 +1,14 @@
 from random import random
 
 from pricing_advertising.acceptance.acceptance import ABCAcceptanceModel
-from pricing_advertising.utils.constants import TOTAL_PRICE_THRESHOLD
+from pricing_advertising.requests.request import Request
 
 
 class SimpleAcceptanceModel(ABCAcceptanceModel):
-    def _accept(self, total_price: float) -> bool:
+    def __init__(self, threshold: dict) -> None:
+        self.threshold = threshold
+
+    def _accept(self, total_price: float, request: Request) -> bool:
         """
         Determines whether a given total price is accepted based on a threshold.
 
@@ -15,7 +18,11 @@ class SimpleAcceptanceModel(ABCAcceptanceModel):
         Returns:
             bool: True if the total price is accepted, False otherwise.
         """
-        if total_price < TOTAL_PRICE_THRESHOLD:
+
+        category = request.get_category()
+        total_price_threshold = self.threshold[category]
+
+        if total_price < total_price_threshold:
             return random() < 0.8
         else:
             return random() < 0.2
