@@ -1,7 +1,7 @@
 import random
 
 import numpy as np
-from scipy.stats import norm, rv_continuous
+from scipy.stats import norm
 
 from pricing_advertising.acceptance.acceptance import ABCAcceptanceModel
 from pricing_advertising.enums.enums import RoomCategory

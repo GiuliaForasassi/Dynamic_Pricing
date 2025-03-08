@@ -29,6 +29,3 @@ dev = [
     "pytest-xdist[psutil]",
 ]
 
-[[tool.uv.index]]
-name = "internal-repo"
-url = "https://mlcube-883313729965.d.codeartifact.eu-west-3.amazonaws.com/pypi/ml3-platform/simple/"
