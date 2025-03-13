@@ -35,6 +35,7 @@ class Hotel:
 
         # matrix of shape (num_categories, total_days) to keep track of the occupancy
         self.occupancy = np.zeros((NUM_CATEGORIES, total_days), dtype=int)
+        self.demand = np.zeros((NUM_CATEGORIES, total_days), dtype=int)
 
     def check_availability(self, request: Request) -> bool:
         """
@@ -130,3 +131,31 @@ class Hotel:
 
         # Update the occupancy matrix for the specified category and period
         self.occupancy[category_idx, start_idx:end_idx] += 1
+
+    def update_demand(self, requests: list[Request], current_day: date) -> None:
+        """
+        Updates the demand for hotel categories based on the given requests for the previous day.
+
+        Args:
+            requests (list[Request]): A list of Request objects representing the requests made.
+            current_day (date): The current day of the simulation.
+
+        Raises:
+            IndexError: If the previous day's index is out of bounds.
+
+        Returns:
+            None
+        """
+        previous_day = current_day - timedelta(days=1)
+        previous_day_idx = (previous_day - self.start_simulation).days
+
+        if previous_day_idx < 0 or previous_day_idx >= self.total_days:
+            raise IndexError("Invalid index for previous day.")  # no updates it out of bounds
+
+        category_counts = np.zeros(NUM_CATEGORIES, dtype=int)
+        for request in requests:
+            category = request.get_category()
+            category_idx = category.value
+            category_counts[category_idx] += 1
+
+        self.demand[:, previous_day_idx] = category_counts
