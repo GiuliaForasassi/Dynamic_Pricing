@@ -1,14 +1,10 @@
 import numpy as np
-from pydantic import BaseModel, Field
 from scipy.special import comb
 
 
-class BernsteinPolynomialModel(BaseModel):
-    """
-    Pricing Model using Bernstein Basis Polynomials.
-    """
-
-    theta: np.ndarray = Field(description="Theta coefficients (non-negative).")
+class BernsteinPolynomialModel:
+    def __init__(self, theta: np.ndarray) -> None:
+        self.theta = theta
 
     @property
     def beta(self) -> np.ndarray:
@@ -44,7 +40,7 @@ class BernsteinPolynomialModel(BaseModel):
         m = len(self.theta) - 1
         return comb(m, k) * (x**k) * ((1 - x) ** (m - k))
 
-    def compute_pricing_function(self, x) -> np.ndarray | float:
+    def predict_price(self, x) -> np.ndarray | float:
         """
         Compute the pricing function using Bernstein basis polynomials.
         Parameters
@@ -67,3 +63,12 @@ class BernsteinPolynomialModel(BaseModel):
         for k in range(m + 1):
             f_values += beta[k] * self.bernstein_basis_polynomial(k, x)
         return f_values
+
+
+if __name__ == "__main__":
+    # Example usage
+    theta_values = np.array([0.1, 0.2, 0.3, 0.4])
+    x_values = np.linspace(0, 1, 10)
+    model = BernsteinPolynomialModel(theta_values)
+    predicted_prices = model.predict_price(x_values)
+    print(predicted_prices)

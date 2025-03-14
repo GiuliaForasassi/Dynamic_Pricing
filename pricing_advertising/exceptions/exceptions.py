@@ -36,6 +36,12 @@ class RoomUnavailableError(BaseHotelError):
         super().__init__(message)
 
 
+class InvalidRoomCategoryError(BaseHotelError):
+    def __init__(self, category: int) -> None:
+        message = f"Invalid room category {category}."
+        super().__init__(message)
+
+
 class NoneAlternativeError(BaseHotelError):
     """Exception raised when there is no alternative room available"""
 

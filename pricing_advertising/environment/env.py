@@ -6,8 +6,10 @@ import gymnasium as gym
 import numpy as np
 
 from pricing_advertising.acceptance.simple_function import SimpleAcceptanceModel
+from pricing_advertising.exceptions.exceptions import InvalidRoomCategoryError
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
+from pricing_advertising.pricing_model.bernstein_model import BernsteinPolynomialModel
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
@@ -185,9 +187,64 @@ class PricingEnv(gym.Env):
         """
         return requests[mask.astype(bool)]
 
-    # TODO: implement this function using Bernstein coeffients
-    def _generate_prices(self, valid_requests: np.ndarray):
-        pass
+    def _generate_prices(self, valid_requests: np.ndarray) -> list[list[float]]:
+        """
+        Generate prices for a list of valid requests.
+
+        Args:
+            valid_requests (np.ndarray): An array of valid requests. Each request should have the attributes
+                                         `t_reservation` (reservation date), `days_stay` (number of days of stay),
+                                         and a method `get_category()` to get the category of the request.
+
+        Returns:
+            list[list[float]]: A list of lists where each inner list contains the prices for each day of stay for a request.
+        """
+        requests_prices = []
+        for request in valid_requests:
+            advance_days = (request.t_reservation - self.today).days
+            x = advance_days / (self.end_simulation - self.start_simulation).days
+            category = request.get_category()
+            theta_coefficients = self._generate_theta_coefficients(category)
+            pricing_model = BernsteinPolynomialModel(theta_coefficients)
+            request_prices = []
+            for _ in range(request.days_stay):
+                price = pricing_model.predict_price(x)
+                request_prices.append(price)
+            requests_prices.append(request_prices)
+        return requests_prices
+
+    def _generate_theta_coefficients(self, category: RoomCategory) -> np.ndarray:
+        """
+        Generate theta coefficients based on the room category.
+
+        This method generates an array of theta coefficients using a uniform distribution
+        within a specified range, depending on the provided room category.
+
+        Args:
+            category (RoomCategory): The category of the room for which to generate theta coefficients.
+                - RoomCategory.CATEGORY1: Coefficients are uniformly distributed between 0.5 and 2.0.
+                - RoomCategory.CATEGORY2: Coefficients are uniformly distributed between 1.5 and 5.0.
+                - RoomCategory.CATEGORY3: Coefficients are uniformly distributed between 3.0 and 8.0.
+
+        Returns:
+            np.ndarray: An array of theta coefficients.
+
+        Raises:
+            InvalidRoomCategoryError: If the provided room category is invalid.
+        """
+        num_coefficients = NUM_COEFFICIENTS
+        rng = np.random.default_rng()
+        if category == RoomCategory.CATEGORY1:
+            theta = rng.uniform(0.5, 2.0, size=num_coefficients)
+        elif category == RoomCategory.CATEGORY2:
+            theta = rng.uniform(1.5, 5.0, size=num_coefficients)
+        elif category == RoomCategory.CATEGORY3:
+            theta = rng.uniform(3.0, 8.0, size=num_coefficients)
+        else:
+            raise InvalidRoomCategoryError(
+                "The room catgory {category} is invalid. Choose one of the available categories."
+            )
+        return theta
 
     def _generate_random_prices_for_request(self, request: Request) -> list[float]:
         """
