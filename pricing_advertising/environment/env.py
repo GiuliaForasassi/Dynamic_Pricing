@@ -281,3 +281,4 @@ class PricingEnv(gym.Env):
         Parameters:
         requests (np.ndarray): An array of requests generated for the current day.
         """
+        self.hotel.update_demand(list(requests), self.today)
