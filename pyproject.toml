@@ -28,4 +28,3 @@ dev = [
     "pytest-asyncio>=0.25.3",
     "pytest-xdist[psutil]",
 ]
-
