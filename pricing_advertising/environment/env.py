@@ -4,6 +4,7 @@ from typing import ClassVar
 
 import gymnasium as gym
 import numpy as np
+from loguru import logger
 
 from pricing_advertising.acceptance.simple_function import ABCAcceptanceModel, SimpleAcceptanceModel
 from pricing_advertising.exceptions.exceptions import (
@@ -188,7 +189,7 @@ class PricingEnv(gym.Env):
         total_rooms_for_category = self.hotel.get_num_rooms_per_category(category)
 
         # Get the corresppnding indexes
-        category_idx = category.value
+        category_idx = category.value - 1
         start_idx = (start_day - self.start_simulation).days
         end_idx = (end_day - self.start_simulation).days
 
@@ -471,8 +472,25 @@ class PricingEnv(gym.Env):
 
 
 if __name__ == "__main__":
+    # Initialize a hotel with some rooms
+    hotel = Hotel(10, 20, 30)
+
+    # Create the environment instance
     env = PricingEnv(
-        start_simulation=date(2021, 1, 1),
-        end_simulation=date(2021, 1, 10),
-        hotel=Hotel(),
+        start_simulation=date(2025, 1, 1),
+        end_simulation=date(2025, 12, 31),
+        hotel=hotel,
     )
+
+    # Reset the environment
+    obs, info = env.reset()
+    logger.info(f"Initial observation: {obs}")
+
+    # Perform a few steps in the environment
+    for _ in range(10):
+        action = env.action_space.sample()
+        obs, reward, done, info = env.step(action)
+        logger.info(f"Observation: {obs}, Reward: {reward}, Done: {done}")
+        if done:
+            break
+    logger.info("Simulation completed.")

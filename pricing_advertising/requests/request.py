@@ -1,5 +1,7 @@
 from datetime import date
 
+from loguru import logger
+
 from pricing_advertising.enums.enums import RoomCategory
 
 
@@ -48,3 +50,10 @@ class Request:
             return RoomCategory.CATEGORY3
         else:
             raise ValueError("The number of guests {num_guests} must be less than or equal to 3.")
+
+
+if __name__ == "__main__":
+    request = Request(date.today(), 3, 2)
+    logger.info(request)
+    logger.info(request.get_total_reservation_days())
+    logger.info(request.get_category())

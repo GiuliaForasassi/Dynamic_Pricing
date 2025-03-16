@@ -2,6 +2,7 @@ import random
 from datetime import date, timedelta
 
 import numpy as np
+from loguru import logger
 from scipy.stats import norm, rv_continuous
 
 from pricing_advertising.exceptions.exceptions import InvalidReservationWindowError
@@ -68,7 +69,7 @@ class RequestGenerator:
         num_requests = max(self.distribution.rvs(size=size), min_num_requests)
 
         # Round to the nearest integer
-        num_requests = round(num_requests)
+        num_requests = int(np.round(num_requests))
         return num_requests
 
     def _generate_request(self, today: date) -> Request:
@@ -96,3 +97,11 @@ class RequestGenerator:
         # number of guests can be 1, 2 or 3
         num_guests = random.randint(MIN_GUESTS, MAX_GUESTS)
         return Request(t_reservation, days_stay, num_guests)
+
+
+if __name__ == "__main__":
+    generator = RequestGenerator(avg_num_requests=10, end_simulation=date(2025, 12, 31))
+    requests = generator.generate_requests(date.today())
+    for request in requests:
+        logger.info(request)
+    logger.info(f"Number of requests: {len(requests)}")
