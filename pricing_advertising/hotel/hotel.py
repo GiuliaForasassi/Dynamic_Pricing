@@ -33,48 +33,6 @@ class Hotel:
             num_total_rooms=num_category1_rooms + num_category2_rooms + num_category3_rooms,
         )
 
-        # matrix of shape (num_categories, total_days) to keep track of the occupancy
-        self.occupancy = np.zeros((NUM_CATEGORIES, total_days), dtype=int)
-        self.demand = np.zeros((NUM_CATEGORIES, total_days), dtype=int)
-
-    def check_availability(self, request: Request) -> bool:
-        """
-        Checks the availability of rooms for a given request.
-
-        Args:
-            request (Request): The request object containing the reservation details.
-
-        Returns:
-            bool: True if there is availability for the requested category and period, False otherwise.
-
-        Raises:
-            NotValidPeriodError: If the requested period is not valid.
-        """
-        # Get the category and period
-        category = request.get_category()
-        start_day = request.t_reservation
-        days_stay = request.days_stay
-        end_day = start_day + timedelta(days=days_stay)
-        total_rooms_for_category = self.get_num_rooms_per_category(category)
-
-        # Get the corresppnding indexes
-        category_idx = category.value
-        start_idx = (start_day - self.start_simulation).days
-        end_idx = (end_day - self.start_simulation).days
-
-        # Check if the period is valid
-        if start_day < self.start_simulation or end_day >= self.end_simulation:
-            raise NotValidPeriodError(
-                start_period=start_day,
-                end_period=end_day,
-                start_simulation=self.start_simulation,
-                end_simulation=self.end_simulation,
-            )
-
-        return bool(
-            np.all(self.occupancy[category_idx, start_idx:end_idx] < total_rooms_for_category)
-        )
-
     def get_num_rooms_per_category(self, category: RoomCategory) -> int:
         """
         Get the number of rooms available for a specific category.

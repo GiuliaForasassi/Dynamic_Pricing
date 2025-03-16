@@ -1,4 +1,5 @@
 import numpy as np
+from loguru import logger
 from scipy.special import comb
 
 
@@ -71,4 +72,4 @@ if __name__ == "__main__":
     x_values = np.linspace(0, 1, 10)
     model = BernsteinPolynomialModel(theta_values)
     predicted_prices = model.predict_price(x_values)
-    print(predicted_prices)
+    logger.info(f"Predicted prices: {predicted_prices}")

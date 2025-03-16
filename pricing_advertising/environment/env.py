@@ -6,7 +6,7 @@ import gymnasium as gym
 import numpy as np
 
 from pricing_advertising.acceptance.simple_function import ABCAcceptanceModel, SimpleAcceptanceModel
-from pricing_advertising.exceptions.exceptions import InvalidRoomCategoryError
+from pricing_advertising.exceptions.exceptions import InvalidRoomCategoryError, NotValidPeriodError
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.pricing_model.bernstein_model import BernsteinPolynomialModel
@@ -17,6 +17,7 @@ from pricing_advertising.utils.constants import (
     MAX_PRICE,
     MIN_AVG_NUM_REQUESTS,
     MIN_PRICE,
+    NUM_CATEGORIES,
     NUM_COEFFICIENTS,
     SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY1,
     SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY2,
@@ -42,6 +43,10 @@ class PricingEnv(gym.Env):
         # Define the dimensions of the state and action spaces and other vars/structure data you need
         self.num_room_categories = len(RoomCategory)
         self.total_days = (end_simulation - start_simulation).days
+
+        # Demand and Occupancy of the hotel
+        self.occupancy = np.zeros((NUM_CATEGORIES, total_days), dtype=int)
+        self.demand = np.zeros((NUM_CATEGORIES, total_days), dtype=int)
 
         # Define the action and observation space
         # Obsevation space includes hotel occupancy, past demand, seasonality
@@ -349,7 +354,7 @@ class PricingEnv(gym.Env):
         """
         self.hotel.update_demand(list(requests), self.today)
 
-    def check_hodel_availability(self, request: Request) -> bool:
+    def check_hotel_availability(self, request: Request) -> bool:
         """
         Checks the availability of rooms for a given request.
 
@@ -367,7 +372,7 @@ class PricingEnv(gym.Env):
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
-        total_rooms_for_category = self.get_num_rooms_per_category(category)
+        total_rooms_for_category = self.hotel.get_num_rooms_per_category(category)
 
         # Get the corresppnding indexes
         category_idx = category.value
