@@ -136,4 +136,21 @@ if __name__ == "__main__":
     logger.info(f"Number of requests: {len(requests)}")
     logger.info(f"Shape: {requests.shape}")
     for request in requests:
+        break
+        logger.info(request)
+
+    print(
+        "-------------------------------------------------------------------------------------------------------------------------------------------------------------"
+    )
+
+    generator2 = RequestGenerator(
+        avg_num_requests=10,
+        end_simulation=date(2025, 3, 31),
+        seed=SEEDS[0],
+        distribution=norm(loc=10, scale=2),  # type: ignore
+    )
+    requests = generator2.generate_requests(date.today())
+    logger.info(f"Number of requests: {len(requests)}")
+    logger.info(f"Shape: {requests.shape}")
+    for request in requests:
         logger.info(request)

@@ -39,7 +39,7 @@ class Hotel:
 
 
 if __name__ == "__main__":
-    hotel = Hotel(10, 20, 30)
+    hotel = Hotel(num_category1_rooms=10, num_category2_rooms=20, num_category3_rooms=30)
     logger.info(
         f"Number of category 1 rooms: {hotel.get_num_rooms_per_category(RoomCategory.CATEGORY1)}"
     )
@@ -50,3 +50,8 @@ if __name__ == "__main__":
         f"Number of category 3 rooms: {hotel.get_num_rooms_per_category(RoomCategory.CATEGORY3)}"
     )
     logger.info(f"Total number of rooms: {hotel.rooms.num_total_rooms}")
+
+    assert hotel.get_num_rooms_per_category(RoomCategory.CATEGORY1) == 10
+    assert hotel.get_num_rooms_per_category(RoomCategory.CATEGORY2) == 20
+    assert hotel.get_num_rooms_per_category(RoomCategory.CATEGORY3) == 30
+    assert hotel.rooms.num_total_rooms == 60
