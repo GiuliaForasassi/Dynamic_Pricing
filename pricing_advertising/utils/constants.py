@@ -1,5 +1,18 @@
 # CONSTANTS
 
+SEEDS = [
+    400287,
+    26508205,
+    45598533,
+    48953810,
+    39797986,
+    50884562,
+    54311534,
+    21503116,
+    33284243,
+    23261443,
+]
+
 # Maximum number of days a client can stay
 MAX_DAYS_STAY = 10
 # Number of min guests in a room = category 1

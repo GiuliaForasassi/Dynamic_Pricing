@@ -12,14 +12,24 @@ from pricing_advertising.utils.constants import (
     MAX_GUESTS,
     MIN_GUESTS,
     MIN_NUM_REQUESTS_FACTOR,
+    SEEDS,
     STD_FACTOR,
 )
 
 
 class RequestGenerator:
     def __init__(
-        self, avg_num_requests: int, end_simulation: date, distribution: rv_continuous | None = None
+        self,
+        avg_num_requests: int,
+        end_simulation: date,
+        distribution: rv_continuous | None = None,
+        seed: int | None = None,
     ) -> None:
+        self.seed = seed
+        if seed is not None:
+            self.np_rng = np.random.default_rng(seed)
+            self.py_rng = random.Random(seed)
+
         self.avg_num_requests = avg_num_requests
         self.end_simulation = end_simulation
 
@@ -32,6 +42,23 @@ class RequestGenerator:
             self.distribution = distribution
 
     def generate_requests(self, today: date) -> np.ndarray:
+        """
+        Generate an array of requests for each day from the given start date until the end of the simulation.
+
+        Args:
+            today (date): The starting date for generating requests.
+
+        Returns:
+            np.ndarray: A numpy array containing all the generated requests for the simulation period.
+        """
+        all_requests = []
+        while today < self.end_simulation:
+            requests = self.generate_daily_requests(today)
+            all_requests.extend(requests)
+            today += timedelta(days=1)
+        return np.array(all_requests)
+
+    def generate_daily_requests(self, today: date) -> np.ndarray:
         """
         Generate a list of requests for a given date.
 
@@ -66,7 +93,9 @@ class RequestGenerator:
         min_num_requests = MIN_NUM_REQUESTS_FACTOR * self.avg_num_requests
 
         # Sample the number of requests from the distribution provided
-        num_requests = max(self.distribution.rvs(size=size), min_num_requests)
+        num_requests = max(
+            self.distribution.rvs(size=size, random_state=self.seed), min_num_requests
+        )
 
         # Round to the nearest integer
         num_requests = int(np.round(num_requests))
@@ -91,17 +120,20 @@ class RequestGenerator:
             raise InvalidReservationWindowError(remaining_days=remaining_days)
 
         # reservation date is between today and the last day of the simulation
-        t_reservation = today + timedelta(days=random.randint(1, remaining_days))
-        days_stay = random.randint(1, min(MAX_DAYS_STAY, remaining_days))
+        t_reservation = today + timedelta(days=self.py_rng.randint(1, remaining_days))
+        days_stay = self.py_rng.randint(1, min(MAX_DAYS_STAY, remaining_days))
 
         # number of guests can be 1, 2 or 3
-        num_guests = random.randint(MIN_GUESTS, MAX_GUESTS)
-        return Request(t_reservation, days_stay, num_guests)
+        num_guests = self.py_rng.randint(MIN_GUESTS, MAX_GUESTS)
+        return Request(today, t_reservation, days_stay, num_guests)
 
 
 if __name__ == "__main__":
-    generator = RequestGenerator(avg_num_requests=10, end_simulation=date(2025, 3, 31))
+    generator = RequestGenerator(
+        seed=SEEDS[0], avg_num_requests=10, end_simulation=date(2025, 3, 31)
+    )
     requests = generator.generate_requests(date.today())
     logger.info(f"Number of requests: {len(requests)}")
+    logger.info(f"Shape: {requests.shape}")
     for request in requests:
         logger.info(request)
