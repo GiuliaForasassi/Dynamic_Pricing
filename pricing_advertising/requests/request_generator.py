@@ -100,8 +100,8 @@ class RequestGenerator:
 
 
 if __name__ == "__main__":
-    generator = RequestGenerator(avg_num_requests=10, end_simulation=date(2025, 12, 31))
+    generator = RequestGenerator(avg_num_requests=10, end_simulation=date(2025, 3, 31))
     requests = generator.generate_requests(date.today())
+    logger.info(f"Number of requests: {len(requests)}")
     for request in requests:
         logger.info(request)
-    logger.info(f"Number of requests: {len(requests)}")

@@ -1,6 +1,8 @@
 import random
+from datetime import date
 
 import numpy as np
+from loguru import logger
 from scipy.stats import norm
 
 from pricing_advertising.acceptance.acceptance import ABCAcceptanceModel
@@ -14,14 +16,6 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         self.avg_prices = avg_prices
         self.variances = variances
         # can add season_factor to handle the seasonality of the prices
-
-    def generate_reference_price(self, category: RoomCategory) -> float:
-        avg_price = self.avg_prices[category]
-        variance = self.variances[category]
-        std = np.sqrt(variance)
-
-        reference_price = norm.rvs(loc=avg_price, scale=std)
-        return max(0, reference_price)
 
     def _accept(self, proposed_price: float, request: Request) -> bool:
         category = request.get_category()
@@ -40,6 +34,17 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         random_number = random.random()
         return random_number <= acceptance_probability
 
+    def _accept_daily_price(self, daily_price: float, request: Request) -> bool:
+        return self._accept(daily_price, request)
+
+    def generate_reference_price(self, category: RoomCategory) -> float:
+        avg_price = self.avg_prices[category]
+        variance = self.variances[category]
+        std = np.sqrt(variance)
+
+        reference_price = norm.rvs(loc=avg_price, scale=std)
+        return max(0, reference_price)
+
     def _logistic_function(
         self,
         proposed_price: float,
@@ -57,3 +62,24 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         # Calculate the acceptance probability
         acceptance_probability = 1 / (1 + np.exp(-beta * (z_score - correction_factor)))
         return acceptance_probability
+
+
+if __name__ == "__main__":
+    avg_prices = {
+        RoomCategory.CATEGORY1: 100,
+        RoomCategory.CATEGORY2: 150,
+        RoomCategory.CATEGORY3: 200,
+    }
+    variances = {
+        RoomCategory.CATEGORY1: 50,
+        RoomCategory.CATEGORY2: 75,
+        RoomCategory.CATEGORY3: 100,
+    }
+    beta = 0.1
+
+    logistic_model = LogisticAcceptanceModel(beta=beta, avg_prices=avg_prices, variances=variances)
+    request = Request(date.today(), 3, 2)
+    total_proposed_price = 110
+    acceptance = logistic_model.accept(total_proposed_price, request)
+    logger.info(f"Request: {request}")
+    logger.info(f"Acceptance: {acceptance}")

@@ -6,15 +6,23 @@ from pricing_advertising.enums.enums import RoomCategory
 
 
 class Request:
-    def __init__(self, t_reservation: date, days_stay: int, num_guests: int) -> None:
+    def __init__(
+        self, t_request: date, t_reservation: date, days_stay: int, num_guests: int
+    ) -> None:
+        if t_request > t_reservation:
+            raise ValueError(
+                f"The request date {t_request} must be before or equal the reservation date {t_reservation}."
+            )
+        self.t_request = t_request
         self.t_reservation = t_reservation
         self.days_stay = days_stay
         self.num_guests = num_guests
 
     def __str__(self) -> str:
-        return f"Reservation: {self.t_reservation} | Stay: {self.days_stay} days | Guests: {self.num_guests}"
+        return f"Request: {self.t_request} | Reservation: {self.t_reservation} | Stay: {self.days_stay} days | Guests: {self.num_guests}"
 
-    def get_total_reservation_days(self) -> int:
+    @property
+    def total_reservation_days(self) -> int:
         """
         Get the total number of reservation days for a given request.
 
@@ -26,7 +34,8 @@ class Request:
         """
         return self.days_stay + 1  # +1 to include the t_res day
 
-    def get_category(self) -> RoomCategory:
+    @property
+    def category(self) -> RoomCategory:
         """
         Determines the room category based on the number of guests in the request.
 
@@ -51,9 +60,31 @@ class Request:
         else:
             raise ValueError("The number of guests {num_guests} must be less than or equal to 3.")
 
+    @property
+    def advance(self) -> int:
+        """
+        Get the number of days in advance the reservation was made.
+
+        Args:
+            request (Request): The request object containing the reservation details.
+
+        Returns:
+            int: The number of days in advance the reservation was made.
+        """
+        return (self.t_reservation - self.t_request).days
+
 
 if __name__ == "__main__":
-    request = Request(date.today(), 3, 2)
+    today = date.today()
+    request = Request(
+        t_request=date(today.year, today.month, today.day - 1),
+        t_reservation=today,
+        days_stay=3,
+        num_guests=2,
+    )
     logger.info(request)
-    logger.info(request.get_total_reservation_days())
-    logger.info(request.get_category())
+    logger.info(request.total_reservation_days)
+    logger.info(request.category)
+
+    assert request.total_reservation_days == 4
+    assert request.category == RoomCategory.CATEGORY2
