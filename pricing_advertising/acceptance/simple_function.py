@@ -19,7 +19,7 @@ class SimpleAcceptanceModel(ABCAcceptanceModel):
             bool: True if the total price is accepted, False otherwise.
         """
 
-        category = request.get_category()
+        category = request.category
         total_price_threshold = self.threshold[category]
 
         if total_price < total_price_threshold:

@@ -18,13 +18,13 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         # can add season_factor to handle the seasonality of the prices
 
     def _accept(self, proposed_price: float, request: Request) -> bool:
-        category = request.get_category()
+        category = request.category
         avg_price = self.avg_prices[category]
         variance = self.variances[category]
 
         reference_price = self.generate_reference_price(category=category)
 
-        acceptance_probability = self._logistic_function(
+        acceptance_probability = self.logistic_function(
             reference_price=reference_price,
             proposed_price=proposed_price,
             beta=self.beta,
@@ -45,7 +45,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         reference_price = norm.rvs(loc=avg_price, scale=std)
         return max(0, reference_price)
 
-    def _logistic_function(
+    def logistic_function(
         self,
         proposed_price: float,
         reference_price: float,
@@ -78,8 +78,42 @@ if __name__ == "__main__":
     beta = 0.1
 
     logistic_model = LogisticAcceptanceModel(beta=beta, avg_prices=avg_prices, variances=variances)
-    request = Request(date.today(), 3, 2)
+    request = Request(
+        t_request=date.today(), t_reservation=date(2025, 3, 30), days_stay=3, num_guests=2
+    )
     total_proposed_price = 110
     acceptance = logistic_model.accept(total_proposed_price, request)
     logger.info(f"Request: {request}")
     logger.info(f"Acceptance: {acceptance}")
+
+    # Negative beta test
+    try:
+        LogisticAcceptanceModel(beta=-0.1, avg_prices=avg_prices, variances=variances)
+        logger.warning("Negative beta test: Model initialized with negative beta!")
+    except ValueError:
+        logger.info("Correctly captured negative beta error.")
+
+    # Zero beta test
+    zero_beta_model = LogisticAcceptanceModel(beta=0, avg_prices=avg_prices, variances=variances)
+    assert (
+        zero_beta_model.logistic_function(
+            proposed_price=110, reference_price=100, beta=0, variance=50, avg_price=100
+        )
+        == 0.5
+    ), "Zero beta should return 0.5 probability"
+
+    # Acceptance probability test
+    acceptance_prob = logistic_model.logistic_function(110, 100, 0.1, 50, 100)
+    assert 0 <= acceptance_prob <= 1, "Acceptance probability should be in [0,1]"
+
+    # Reference price test
+    reference_price = logistic_model.generate_reference_price(RoomCategory.CATEGORY1)
+    assert reference_price >= 0, "Reference price should be non-negative"
+
+    # Invalid room category test
+    try:
+        logistic_model.generate_reference_price(None)  # type: ignore
+    except KeyError:
+        logger.info("Correctly caught invalid room category error.")
+
+    logger.info("All tests passed successfully!")

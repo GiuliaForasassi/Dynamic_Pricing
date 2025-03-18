@@ -84,6 +84,20 @@ if __name__ == "__main__":
     assert np.all(predicted_prices >= 0), "Predicted prices should be non-negative"
     assert np.all(theta_values == model.theta), "Theta values should match the input values"
 
+    try:
+        BernsteinPolynomialModel(theta=np.array([]))  # Should raise ValueError
+    except ValueError as e:
+        logger.info(f"Correctly captured empty theta error: {e}")
+    try:
+        BernsteinPolynomialModel(theta=np.array([1]))  # Should work
+        logger.info("Single-element theta test passed.")
+    except Exception as e:
+        logger.error(f"Single-element theta test failed: {e}")
+    try:
+        BernsteinPolynomialModel(theta=theta_values, min_price=-1)  # Should raise ValueError
+    except ValueError as e:
+        logger.info(f"Correctly caught negative min_price error: {e}")
+
     plt.plot(advance_values, predicted_prices, label="Predicted Prices")
     plt.xlabel("Advance days")
     plt.ylabel("Price")

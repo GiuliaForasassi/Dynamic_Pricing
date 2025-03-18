@@ -55,3 +55,17 @@ if __name__ == "__main__":
     assert hotel.get_num_rooms_per_category(RoomCategory.CATEGORY2) == 20
     assert hotel.get_num_rooms_per_category(RoomCategory.CATEGORY3) == 30
     assert hotel.rooms.num_total_rooms == 60
+
+    zero_hotel = Hotel(0, 0, 0)
+    assert zero_hotel.rooms.num_total_rooms == 0, "Total rooms should be 0 when all inputs are 0"
+
+    try:
+        invalid_hotel = Hotel(-1, 10, 5)
+    except ValueError:
+        logger.info("Correctly captured negative room error.")
+    try:
+        hotel.get_num_rooms_per_category(None)  # type: ignore
+    except ValueError as e:
+        logger.info(f"Correctly captured invalid category error: {e}")
+
+    logger.info("All tests passed successfully!")

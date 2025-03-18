@@ -21,7 +21,23 @@ class Room:
 
 if __name__ == "__main__":
     room1 = Room(1, RoomCategory.CATEGORY1)
-    logger.info(room1)  # Room 1 (CATEGORY1)
+    logger.info(room1)
+
+    assert room1.room_id == 1
+    assert room1.category == RoomCategory.CATEGORY1
 
     room2 = Room(2, RoomCategory.CATEGORY2)
-    logger.info(room2)  # Room 2 (CATEGORY2)
+    logger.info(room2)
+
+    assert room2.room_id == 2
+    assert room2.category == RoomCategory.CATEGORY2
+
+    assert ROOM_ALTERNATIVES[RoomCategory.CATEGORY1] == [
+        RoomCategory.CATEGORY2,
+        RoomCategory.CATEGORY3,
+    ], "Incorrect alternatives for CATEGORY1"
+    assert ROOM_ALTERNATIVES[RoomCategory.CATEGORY2] == [
+        RoomCategory.CATEGORY3
+    ], "Incorrect alternatives for CATEGORY2"
+    assert ROOM_ALTERNATIVES[RoomCategory.CATEGORY3] == [], "CATEGORY3 should have no alternatives"
+    logger.info("All tests passed successfully!")
