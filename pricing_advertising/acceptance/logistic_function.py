@@ -19,8 +19,8 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
 
     def _accept(self, proposed_price: float, request: Request) -> bool:
         category = request.category
-        avg_price = self.avg_prices[category]
-        variance = self.variances[category]
+        avg_price = self.avg_prices[category.value]
+        variance = self.variances[category.value]
 
         reference_price = self.generate_reference_price(category=category)
 
@@ -38,8 +38,8 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         return self._accept(daily_price, request)
 
     def generate_reference_price(self, category: RoomCategory) -> float:
-        avg_price = self.avg_prices[category]
-        variance = self.variances[category]
+        avg_price = self.avg_prices[category.value]
+        variance = self.variances[category.value]
         std = np.sqrt(variance)
 
         reference_price = norm.rvs(loc=avg_price, scale=std)

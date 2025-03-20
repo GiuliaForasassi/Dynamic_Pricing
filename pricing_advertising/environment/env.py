@@ -1,11 +1,12 @@
 import random
 from datetime import date, timedelta
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import gymnasium as gym
 import numpy as np
 from loguru import logger
 
+from pricing_advertising.acceptance.logistic_function import LogisticAcceptanceModel
 from pricing_advertising.acceptance.simple_function import ABCAcceptanceModel, SimpleAcceptanceModel
 from pricing_advertising.exceptions.exceptions import (
     InvalidRoomCategoryError,
@@ -18,15 +19,15 @@ from pricing_advertising.pricing_model.bernstein_model import BernsteinPolynomia
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
+    LOGISTIC_ACCEPTANCE_AVG_PRICES,
+    LOGISTIC_ACCEPTANCE_BETA,
+    LOGISTIC_ACCEPTANCE_VARIANCES,
     MAX_AVG_NUM_REQUESTS,
     MAX_PRICE,
     MIN_AVG_NUM_REQUESTS,
     MIN_PRICE,
     NUM_CATEGORIES,
     NUM_COEFFICIENTS,
-    SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY1,
-    SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY2,
-    SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY3,
 )
 
 
@@ -42,8 +43,14 @@ class PricingEnv(gym.Env):
         avg_num_requests: int | None = None,
         request_generator: RequestGenerator | None = None,
         acceptance_model: ABCAcceptanceModel | None = None,
+        seed: int | None = None,
     ) -> None:
         super().__init__()
+
+        if start_simulation > end_simulation:
+            raise ValueError(
+                f"The start date {start_simulation} must be before the end date {end_simulation}."
+            )
 
         # Define the dimensions of the state and action spaces and other vars/structure data you need
         self.num_room_categories = len(RoomCategory)
@@ -74,7 +81,7 @@ class PricingEnv(gym.Env):
         # action space is coefficients of the Bernstein polynomial
         self.action_space = gym.spaces.Box(
             low=0,
-            high=float("inf"),
+            high=1,
             shape=(self.num_room_categories, NUM_COEFFICIENTS),
             dtype=np.float32,
         )
@@ -88,18 +95,21 @@ class PricingEnv(gym.Env):
         )
         self.hotel = hotel
 
+        self.seed = seed
+        self.np_rng = np.random.default_rng(seed)
+        self.py_rng = random.Random(seed)
+
         # Instantiate the request generator and acceptance model
         self.request_generator = request_generator or RequestGenerator(
-            self.avg_num_requests, end_simulation, distribution=None
+            self.avg_num_requests, end_simulation, distribution=None, seed=seed
         )
-        self.acceptance_model = acceptance_model or SimpleAcceptanceModel(
-            threshold={
-                RoomCategory.CATEGORY1: SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY1,
-                RoomCategory.CATEGORY2: SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY2,
-                RoomCategory.CATEGORY3: SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY3,
-            }
+        self.acceptance_model = acceptance_model or LogisticAcceptanceModel(
+            beta=LOGISTIC_ACCEPTANCE_BETA,
+            avg_prices=LOGISTIC_ACCEPTANCE_AVG_PRICES,
+            variances=LOGISTIC_ACCEPTANCE_VARIANCES,
         )
 
+    # region STEP
     def step(self, action) -> tuple:
         """
         Execute one time step within the environment.
@@ -117,26 +127,28 @@ class PricingEnv(gym.Env):
 
         # Generate requests for the current day
         requests = self.request_generator.generate_requests(self.today)
-
+        for request in requests:
+            logger.info(f"Requests: {request}")
         # Check if the requests can be accommodated
         valid_mask = self._process_requests(requests)
         valid_requests = self._apply_mask(valid_mask, requests)
 
-        # Generate prices for each day of valid requests
-        daily_prices = self._generate_random_prices(valid_requests)
-
-        # Accept or reject the requests
-        (accepted_mask, tot_prices) = self._evaluate_prices(daily_prices)
-        accepted_requests = self._apply_mask(accepted_mask, valid_requests)
-
-        # Calculate the revenue of accepted requests
-        reward = self._calculate_reward(tot_prices, accepted_mask)  # to fix
-
-        # Update the hotel occupancy
-        self._update_occupancy(accepted_requests)
-
         # Update the demand
         self._update_demand(requests)
+
+        # Generate prices for each day of valid requests
+        daily_prices = self._generate_prices(valid_requests, action)
+
+        # Accept or reject the requests
+        (accepted_mask, tot_prices) = self._evaluate_prices(daily_prices, valid_requests)
+        accepted_requests = self._apply_mask(accepted_mask, valid_requests)
+
+        # Update the hotel occupancy
+        occupancy_mask = self._update_occupancy(accepted_requests)
+        final_requests = self._apply_mask(occupancy_mask, accepted_requests)
+
+        # Calculate the revenue of accepted requests
+        reward = self._calculate_reward(tot_prices, final_requests)  # to fix
 
         # Move to the next day
         self.today += timedelta(days=1)
@@ -146,7 +158,9 @@ class PricingEnv(gym.Env):
         info = {}  # Placeholder for additional info
         return observation, reward, done, info
 
-    def reset(self, seed=None) -> tuple:
+    # endregion
+
+    def reset(self, seed: int | None = None) -> tuple:
         """
         Resets the environment to its initial state.
 
@@ -159,6 +173,10 @@ class PricingEnv(gym.Env):
         Returns:
             tuple: A tuple containing the initial observation from the observation space and an empty dictionary for additional info.
         """
+        if seed is not None:
+            self.np_rng = np.random.default_rng(seed)
+            self.py_rng = random.Random(seed)
+
         super().reset(seed=seed)  # requires this call to control randomness and reproducibility
 
         # Reset the state of the environment to the initial state
@@ -182,7 +200,7 @@ class PricingEnv(gym.Env):
             NotValidPeriodError: If the requested period is not valid.
         """
         # Get the category and period
-        category = request.get_category()
+        category = request.category
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
@@ -194,7 +212,7 @@ class PricingEnv(gym.Env):
         end_idx = (end_day - self.start_simulation).days
 
         # Check if the period is valid
-        if start_day < self.start_simulation or end_day >= self.end_simulation:
+        if start_day < self.start_simulation or end_day > self.end_simulation:
             raise NotValidPeriodError(
                 start_period=start_day,
                 end_period=end_day,
@@ -206,18 +224,26 @@ class PricingEnv(gym.Env):
             np.all(self.occupancy[category_idx, start_idx:end_idx] < total_rooms_for_category)
         )
 
-    def update_hotel_occupancy(self, request: Request) -> None:
+    def update_hotel_occupancy(self, request: Request) -> bool:
         """
-        Updates the occupancy matrix for a specified category and period based on the given request.
+        Updates the hotel occupancy for a given reservation request.
+
+        This method checks if a reservation request can be accommodated based on the
+        current occupancy and the total number of rooms available for the requested
+        category. If the request is valid and there is sufficient capacity, the
+        occupancy matrix is updated accordingly.
 
         Args:
-            request (Request): The request object containing reservation details.
+            request (Request): The reservation request containing the category,
+                start date, and duration of the stay.
 
         Returns:
-            None
+            bool: True if the reservation can be accommodated and the occupancy
+                matrix is updated, False otherwise.
+
         """
         # Get the category and period
-        category = request.get_category()
+        category = request.category
         start_day = request.t_reservation
         days_stay = request.days_stay
         end_day = start_day + timedelta(days=days_stay)
@@ -229,55 +255,36 @@ class PricingEnv(gym.Env):
 
         total_rooms_for_category = self.hotel.get_num_rooms_per_category(category)
 
-        # Check if the request period is valid and the category index is within bounds
-        if days_stay <= 0:
-            raise ValueError(
-                "The number of days for the stay must be greater than 0. Received days_stay: {days_stay}"
-            )
-        if category_idx < 0 or category_idx >= self.occupancy.shape[0]:
-            raise IndexError("Invalid category index.")
-        if start_day < self.start_simulation or end_day > self.end_simulation:
-            raise NotValidPeriodError(
-                start_period=start_day,
-                end_period=end_day,
-                start_simulation=self.start_simulation,
-                end_simulation=self.end_simulation,
-            )
-
         # Check capacity for each day of the period
-        if np.any(self.occupancy[category_idx, start_idx:end_idx] >= total_rooms_for_category):
-            raise RoomUnavailableError(category=category_idx)
+        if np.any(self.occupancy[category_idx - 1, start_idx:end_idx] > total_rooms_for_category):
+            return False
 
         # Update the occupancy matrix for the specified category and period
-        self.occupancy[category_idx, start_idx:end_idx] += 1
+        self.occupancy[category_idx - 1, start_idx:end_idx] += 1
+        return True
 
-    def update_hotel_demand(self, requests: list[Request], current_day: date) -> None:
+    def update_hotel_demand(self, requests: np.ndarray) -> None:
         """
-        Updates the demand for hotel categories based on the given requests for the previous day.
+        Updates the hotel demand matrix based on a list of reservation requests.
+
+        This method processes each request in the provided list and increments the
+        corresponding entry in the demand matrix. The demand matrix is updated
+        based on the category of the request and the reservation date relative
+        to the simulation start date.
 
         Args:
-            requests (list[Request]): A list of Request objects representing the requests made.
-            current_day (date): The current day of the simulation.
-
-        Raises:
-            IndexError: If the previous day's index is out of bounds.
+            requests (np.ndarray): A vector of Request objects, where each
+                request contains information about the category and reservation
+                date.
 
         Returns:
             None
         """
-        previous_day = current_day - timedelta(days=1)
-        previous_day_idx = (previous_day - self.start_simulation).days
-
-        if previous_day_idx < 0 or previous_day_idx >= self.total_days:
-            raise IndexError("Invalid index for previous day.")  # no updates it out of bounds
-
-        category_counts = np.zeros(NUM_CATEGORIES, dtype=int)
         for request in requests:
-            category = request.get_category()
-            category_idx = category.value
-            category_counts[category_idx] += 1
-
-        self.demand[:, previous_day_idx] = category_counts
+            request = cast(Request, request)
+            category_idx = request.category.value - 1
+            t_reservation_idx = (request.t_reservation - self.start_simulation).days
+            self.demand[category_idx, t_reservation_idx] += 1
 
     def _process_requests(self, requests: np.ndarray) -> np.ndarray:
         """
@@ -317,7 +324,7 @@ class PricingEnv(gym.Env):
         """
         return requests[mask.astype(bool)]
 
-    def _generate_prices(self, valid_requests: np.ndarray) -> list[list[float]]:
+    def _generate_prices(self, valid_requests: np.ndarray, action: np.ndarray) -> list[list[float]]:
         """
         Generate prices for a list of valid requests.
 
@@ -330,15 +337,13 @@ class PricingEnv(gym.Env):
             list[list[float]]: A list of lists where each inner list contains the prices for each day of stay for a request.
         """
         requests_prices = []
-        for request in valid_requests:
-            advance_days = (request.t_reservation - self.today).days
-            x = advance_days / (self.end_simulation - self.start_simulation).days
-            category = request.get_category()
-            theta_coefficients = self._generate_theta_coefficients(category)
-            pricing_model = BernsteinPolynomialModel(theta_coefficients)
+        pricing_model = BernsteinPolynomialModel(action)
+        advances = np.vectorize(lambda x: x.advance)(valid_requests)  # type: ignore
+        for advance, request in zip(advances, valid_requests, strict=True):
             request_prices = []
-            for _ in range(request.days_stay):
-                price = pricing_model.predict_price(x)
+            request = cast(Request, request)
+            for day_idx in range(request.total_reservation_days):
+                price = pricing_model.predict_price((advance - day_idx) / self.total_days)
                 request_prices.append(price)
             requests_prices.append(request_prices)
         return requests_prices
@@ -392,7 +397,7 @@ class PricingEnv(gym.Env):
             list[float]: A list of random daily prices for the reservation period.
         """
         request_prices = []
-        reservation_days = request.get_total_reservation_days()
+        reservation_days = request.total_reservation_days
         for _ in range(reservation_days):
             rng = np.random.default_rng()
             random_daily_price = rng.uniform(MIN_PRICE, MAX_PRICE)
@@ -415,23 +420,18 @@ class PricingEnv(gym.Env):
             requests_prices.append(request_prices)
         return requests_prices
 
-    def _evaluate_prices(self, daily_prices: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Evaluates the given daily prices and determines which prices are accepted.
-
-        Args:
-            daily_prices (list[list[float]]): A list of lists where each inner list contains daily prices.
-
-        Returns:
-            tuple[np.ndarray, np.ndarray]: A tuple containing two numpy arrays:
-                - The first array contains boolean flags indicating whether each total price was accepted.
-                - The second array contains the total prices for each request.
-        """
+    def _evaluate_prices(
+        self, daily_prices: list[list[float]], requests: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if len(daily_prices) != len(requests):
+            raise ValueError(
+                f"The number of daily prices must be equal to the number of requests. Daily prices: {len(daily_prices)}, Requests: {len(requests)}."
+            )
         accepted_prices = []
         total_prices = []
-        for request in daily_prices:
-            total_price = sum(request)
-            flag = self.acceptance_model.accept(total_price, request)  # type: ignore
+        for prices, request in zip(daily_prices, requests, strict=True):
+            total_price = sum(prices)
+            flag = self.acceptance_model.accept(total_price, request)
 
             accepted_prices.append(flag)
             total_prices.append(total_price)
@@ -450,16 +450,17 @@ class PricingEnv(gym.Env):
         """
         return np.sum(prices[accepted_mask.astype(bool)])
 
-    def _update_occupancy(self, accepted_requests: np.ndarray) -> None:
+    def _update_occupancy(self, accepted_requests: np.ndarray) -> np.ndarray:
         """
         Update the occupancy of the hotel based on the accepted requests.
 
         Parameters:
         accepted_requests (np.ndarray): An array of accepted requests.
         """
-        accepted_requests.tolist()
+        valid_mask = []
         for request in accepted_requests:
-            self.update_hotel_occupancy(request)
+            valid_mask.append(self.update_hotel_occupancy(request))
+        return np.array(valid_mask, dtype=bool)
 
     def _update_demand(self, requests: np.ndarray) -> None:
         """
@@ -468,29 +469,38 @@ class PricingEnv(gym.Env):
         Parameters:
         requests (np.ndarray): An array of requests generated for the current day.
         """
-        self.update_hotel_demand(list(requests), self.today)
+        self.update_hotel_demand(requests)
 
 
+# region MAIN
 if __name__ == "__main__":
-    # Initialize a hotel with some rooms
-    hotel = Hotel(10, 20, 30)
+    hotel = Hotel(num_category1_rooms=10, num_category2_rooms=20, num_category3_rooms=30)
 
-    # Create the environment instance
+    try:
+        env_invalid_dates = PricingEnv(
+            start_simulation=date(2025, 12, 31),
+            end_simulation=date(2025, 1, 1),
+            hotel=hotel,
+        )
+    except ValueError as e:
+        logger.info("Value error succesfully triggered.")
+        logger.info(e)
+
     env = PricingEnv(
         start_simulation=date(2025, 1, 1),
-        end_simulation=date(2025, 12, 31),
+        end_simulation=date(2025, 1, 31),
         hotel=hotel,
     )
 
-    # Reset the environment
     obs, info = env.reset()
     logger.info(f"Initial observation: {obs}")
 
-    # Perform a few steps in the environment
-    for _ in range(10):
+    for _ in range(1):
         action = env.action_space.sample()
+        logger.info(f"Action: {action}")
         obs, reward, done, info = env.step(action)
-        logger.info(f"Observation: {obs}, Reward: {reward}, Done: {done}")
+        logger.info(f"Observation: {obs}, Reward: {reward}, Done: {done}, Info: {info}")
         if done:
             break
     logger.info("Simulation completed.")
+# endregion

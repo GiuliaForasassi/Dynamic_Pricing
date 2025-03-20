@@ -26,12 +26,17 @@ class RequestGenerator:
         seed: int | None = None,
     ) -> None:
         self.seed = seed
-        if seed is not None:
-            self.np_rng = np.random.default_rng(seed)
-            self.py_rng = random.Random(seed)
 
+        self.np_rng = np.random.default_rng(seed)
+        self.py_rng = random.Random(seed)
         self.avg_num_requests = avg_num_requests
         self.end_simulation = end_simulation
+
+        if not isinstance(end_simulation, date):
+            raise ValueError("The end_simulation must be a date object")
+
+        if avg_num_requests < 0:
+            raise ValueError("The average number of requests must be greater than 0")
 
         # If no distribution is provided, we use a normal distribution (loc: mean, scale: std)
         if distribution is None:
@@ -51,8 +56,14 @@ class RequestGenerator:
         Returns:
             np.ndarray: A numpy array containing all the generated requests for the simulation period.
         """
+        if not isinstance(today, date):
+            raise ValueError("The start date must be a date object")
+
+        if today >= self.end_simulation:
+            raise ValueError("The start date must be before the end of the simulation")
+
         all_requests = []
-        while today < self.end_simulation:
+        while today < self.end_simulation - timedelta(days=1):
             requests = self.generate_daily_requests(today)
             all_requests.extend(requests)
             today += timedelta(days=1)
@@ -90,7 +101,7 @@ class RequestGenerator:
             int: The sampled number of requests, rounded to the nearest integer.
         """
 
-        min_num_requests = MIN_NUM_REQUESTS_FACTOR * self.avg_num_requests
+        min_num_requests = max(1, MIN_NUM_REQUESTS_FACTOR * self.avg_num_requests)
 
         # Sample the number of requests from the distribution provided
         num_requests = max(
@@ -116,12 +127,15 @@ class RequestGenerator:
 
         """
         remaining_days = (self.end_simulation - today).days
-        if remaining_days <= 0:
+        if remaining_days <= 1:
             raise InvalidReservationWindowError(remaining_days=remaining_days)
 
         # reservation date is between today and the last day of the simulation
-        t_reservation = today + timedelta(days=self.py_rng.randint(1, remaining_days))
-        days_stay = self.py_rng.randint(1, min(MAX_DAYS_STAY, remaining_days))
+        # I can't reserve for today, so I add 1 to the randint
+        # Subtract 1 because days stay must me at least 1
+        t_reservation = today + timedelta(days=self.py_rng.randint(1, remaining_days - 1))
+        remaining_days_from_reservation = (self.end_simulation - t_reservation).days
+        days_stay = self.py_rng.randint(1, min(MAX_DAYS_STAY, remaining_days_from_reservation))
 
         # number of guests can be 1, 2 or 3
         num_guests = self.py_rng.randint(MIN_GUESTS, MAX_GUESTS)
@@ -154,3 +168,5 @@ if __name__ == "__main__":
     logger.info(f"Shape: {requests.shape}")
     for request in requests:
         logger.info(request)
+
+    generator = RequestGenerator(avg_num_requests=10, end_simulation=date(2025, 3, 31))
