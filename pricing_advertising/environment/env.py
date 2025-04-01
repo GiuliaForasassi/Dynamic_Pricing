@@ -142,13 +142,15 @@ class PricingEnv(gym.Env):
         # Accept or reject the requests
         (accepted_mask, tot_prices) = self._evaluate_prices(daily_prices, valid_requests)
         accepted_requests = self._apply_mask(accepted_mask, valid_requests)
+        accepted_prices = self._apply_mask(accepted_mask, tot_prices)
 
         # Update the hotel occupancy
         occupancy_mask = self._update_occupancy(accepted_requests)
         final_requests = self._apply_mask(occupancy_mask, accepted_requests)
+        final_prices = self._apply_mask(occupancy_mask, accepted_prices)
 
         # Calculate the revenue of accepted requests
-        reward = self._calculate_reward(tot_prices, final_requests)  # to fix
+        reward = self._calculate_reward(final_prices, final_requests)  # to fix
 
         # Move to the next day
         self.today += timedelta(days=1)
@@ -502,8 +504,11 @@ if __name__ == "__main__":
     for _ in range(100):
         action = env.action_space.sample()
         logger.info(f"Action: {action}")
+        step_start = time.time()
         obs, reward, done, info = env.step(action)
         # logger.info(f"Observation: {obs}, Reward: {reward}, Done: {done}, Info: {info}")
+        step_end = time.time()
+        logger.info(f"Step time: {step_end - step_start} seconds")
         if done:
             break
         e_ = time.time()

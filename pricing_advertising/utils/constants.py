@@ -58,3 +58,5 @@ LOGISTIC_ACCEPTANCE_VARIANCES = {
     2: 37.5,
     3: 50,
 }
+
+N_ENVS = 2
