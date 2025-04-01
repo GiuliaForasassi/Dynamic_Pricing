@@ -133,7 +133,9 @@ class RequestGenerator:
         # reservation date is between today and the last day of the simulation
         # I can't reserve for today, so I add 1 to the randint
         # Subtract 1 because days stay must me at least 1
-        t_reservation = today + timedelta(days=self.py_rng.randint(1, remaining_days - 1))
+        t_reservation = today + timedelta(
+            days=self.py_rng.randint(1, remaining_days - 1)
+        )  # TODO: change this!
         remaining_days_from_reservation = (self.end_simulation - t_reservation).days
         days_stay = self.py_rng.randint(1, min(MAX_DAYS_STAY, remaining_days_from_reservation))
 

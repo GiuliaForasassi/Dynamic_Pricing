@@ -7,11 +7,10 @@ import numpy as np
 from loguru import logger
 
 from pricing_advertising.acceptance.logistic_function import LogisticAcceptanceModel
-from pricing_advertising.acceptance.simple_function import ABCAcceptanceModel, SimpleAcceptanceModel
+from pricing_advertising.acceptance.simple_function import ABCAcceptanceModel
 from pricing_advertising.exceptions.exceptions import (
     InvalidRoomCategoryError,
     NotValidPeriodError,
-    RoomUnavailableError,
 )
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
@@ -29,6 +28,7 @@ from pricing_advertising.utils.constants import (
     NUM_CATEGORIES,
     NUM_COEFFICIENTS,
 )
+from pricing_advertising.utils.utils_functions import extract_advance
 
 
 class PricingEnv(gym.Env):
@@ -75,6 +75,7 @@ class PricingEnv(gym.Env):
                 # TODO: coversion sin and cosine
                 "today": gym.spaces.Box(low=0, high=1),
                 # TODO: remember to add seasonality
+                "seasonality": gym.spaces.Box(low=0, high=1),
             }
         )
 
@@ -127,8 +128,7 @@ class PricingEnv(gym.Env):
 
         # Generate requests for the current day
         requests = self.request_generator.generate_requests(self.today)
-        for request in requests:
-            logger.info(f"Requests: {request}")
+
         # Check if the requests can be accommodated
         valid_mask = self._process_requests(requests)
         valid_requests = self._apply_mask(valid_mask, requests)
@@ -154,8 +154,8 @@ class PricingEnv(gym.Env):
         self.today += timedelta(days=1)
         done = self.today >= self.end_simulation
         observation = self.observation_space.sample()
-        reward = 0  # Placeholder for reward calculation
         info = {}  # Placeholder for additional info
+
         return observation, reward, done, info
 
     # endregion
@@ -336,9 +336,10 @@ class PricingEnv(gym.Env):
         Returns:
             list[list[float]]: A list of lists where each inner list contains the prices for each day of stay for a request.
         """
+
         requests_prices = []
         pricing_model = BernsteinPolynomialModel(action)
-        advances = np.vectorize(lambda x: x.advance)(valid_requests)  # type: ignore
+        advances = [extract_advance(req) for req in valid_requests]
         for advance, request in zip(advances, valid_requests, strict=True):
             request_prices = []
             request = cast(Request, request)
@@ -494,13 +495,20 @@ if __name__ == "__main__":
 
     obs, info = env.reset()
     logger.info(f"Initial observation: {obs}")
+    import time
 
-    for _ in range(1):
+    s = time.time()
+    for _ in range(100):
         action = env.action_space.sample()
         logger.info(f"Action: {action}")
         obs, reward, done, info = env.step(action)
-        logger.info(f"Observation: {obs}, Reward: {reward}, Done: {done}, Info: {info}")
+        # logger.info(f"Observation: {obs}, Reward: {reward}, Done: {done}, Info: {info}")
         if done:
             break
+        e_ = time.time()
+        logger.info(f"Time taken: {(e_ - s)} seconds")
     logger.info("Simulation completed.")
+
+    e = time.time()
+    logger.info(f"Time taken: {(e - s) / 100} seconds")
 # endregion
