@@ -340,6 +340,7 @@ class PricingEnv(gym.Env):
         requests_prices = []
         pricing_model = BernsteinPolynomialModel(action)
         advances = [extract_advance(req) for req in valid_requests]
+        advances = np.array(advances)
         for advance, request in zip(advances, valid_requests, strict=True):
             request_prices = []
             request = cast(Request, request)
