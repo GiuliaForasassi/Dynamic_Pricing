@@ -82,23 +82,6 @@ class Request:
         """
         return (self.t_reservation - self.t_request).days
 
-    def _map_season(self) -> str:
-        """
-        Determines the season based on the month of the reservation.
-
-        Returns:
-            str: A string indicating the season:
-                 - "high" for months January, February, July, August, September, and December.
-                 - "low" for months March, April, May, June, October, and November.
-                 - "unknown" if the month does not match any of the predefined categories.
-        """
-        if self.t_reservation.month in [1, 2, 7, 8, 9, 12]:
-            return "high"
-        elif self.t_reservation.month in [3, 4, 5, 6, 10, 11]:
-            return "low"
-        # Default case to ensure all code paths return a value
-        return "unknown"
-
 
 if __name__ == "__main__":
     today = date.today()

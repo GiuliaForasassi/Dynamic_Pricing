@@ -28,6 +28,8 @@ from pricing_advertising.utils.constants import (
     MIN_PRICE,
     NUM_CATEGORIES,
     NUM_COEFFICIENTS,
+    NUM_WINDOWS,
+    WINDOW_SIZE,
 )
 from pricing_advertising.utils.utils_functions import extract_advance
 
@@ -70,16 +72,15 @@ class PricingEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(
             {
                 "occupancy": gym.spaces.Box(
-                    low=0, high=1, shape=(self.num_room_categories, self.total_days)
+                    low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS)
                 ),
                 # 1000 da parametrizzare: max customer
                 "demand": gym.spaces.Box(
-                    low=0, high=1, shape=(self.num_room_categories, self.total_days)
+                    low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS)
                 ),
                 # represent a day as a integer number
-                # TODO: coversion sin and cosine
                 "today": gym.spaces.Box(low=0, high=1),
-                # TODO: remember to add seasonality
+                # seasonality is represented as a discrete value: 0 for low season, 1 for high season
                 "seasonality": gym.spaces.Discrete(2, seed=seed),
             }
         )
@@ -110,6 +111,62 @@ class PricingEnv(gym.Env):
             avg_prices=LOGISTIC_ACCEPTANCE_AVG_PRICES,
             variances=LOGISTIC_ACCEPTANCE_VARIANCES,
         )
+
+    def get_observation(self) -> dict:
+        current_day_index = (self.today - self.start_simulation).days
+        total_days = self.total_days
+
+        # 12 windows of 30 days each
+        window_size = WINDOW_SIZE
+        num_windows = NUM_WINDOWS
+
+        occupancy_windows = np.zeros((self.num_room_categories, num_windows), dtype=np.float32)
+        demand_windows = np.zeros((self.num_room_categories, num_windows), dtype=np.float32)
+
+        for category in range(self.num_room_categories):
+            num_rooms_category = self.hotel.get_num_rooms_per_category(RoomCategory(category + 1))
+            for window in range(num_windows):
+                # Calculate the start and end indices for the current window
+                start = current_day_index + window * window_size
+                end = min(current_day_index + (window + 1) * window_size, total_days)
+
+                # Calculate the occupancy and demand sums for the current window
+                occupancy_sum = np.sum(self.occupancy[category, start:end])
+                demand_sum = np.sum(self.demand[category, start:end])
+
+                # Normalize the occupancy and demand values
+                max_possible_occupancy = (end - start) * num_rooms_category
+                if max_possible_occupancy > 0:
+                    occupancy_windows[category, window] = occupancy_sum / max_possible_occupancy
+
+                demand_windows[category, window] = demand_sum  # qui non ho max demand...???
+
+        # Normalize the time
+        if total_days > 0:
+            today_normalized = current_day_index / total_days
+
+        seasonality = self.get_seasonality(self.today)  # 0 for low season, 1 for high season
+
+        return {
+            "occupancy": occupancy_windows,
+            "demand": demand_windows,
+            "today": np.array([today_normalized], dtype=np.float32),
+            "seasonality": int(seasonality),
+        }
+
+    def get_seasonality(self, time: date) -> int:
+        """
+        Determine the seasonality based on the given date.
+
+        Args:
+            time (date): The date for which to determine the seasonality.
+
+        Returns:
+            int: Returns 1 if the month of the given date is considered high season
+                 (January, February, July, August, September, or December),
+                 otherwise returns 0.
+        """
+        return 1 if time.month in [1, 2, 7, 8, 9, 12] else 0
 
     # region STEP
     def step(self, action) -> tuple:
