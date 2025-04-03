@@ -60,7 +60,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         correction_factor = (reference_price - avg_price) / np.sqrt(variance)
 
         # Calculate the acceptance probability
-        acceptance_probability = 1 / (1 + np.exp(-beta * (z_score - correction_factor)))
+        acceptance_probability = 1 / (1 + np.exp(beta * (z_score - correction_factor)))
         return acceptance_probability
 
 
