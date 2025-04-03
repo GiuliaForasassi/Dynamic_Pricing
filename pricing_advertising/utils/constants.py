@@ -59,4 +59,6 @@ LOGISTIC_ACCEPTANCE_VARIANCES = {
     3: 50,
 }
 
+# ENVIRONMENT PARAMETERS
+# Number of environments for parallel processing
 N_ENVS = 2

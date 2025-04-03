@@ -37,13 +37,10 @@ class Request:
     @property
     def category(self) -> RoomCategory:
         """
-        Determines the room category based on the number of guests in the request.
-
-        Args:
-            request (Request): The request object containing the number of guests.
+        Determines the room category based on the number of guests.
 
         Returns:
-            RoomCategory: The category of the room based on the number of guests.
+            RoomCategory: The category of the room corresponding to the number of guests.
 
         Raises:
             ValueError: If the number of guests is less than 1 or greater than 3.
@@ -60,6 +57,18 @@ class Request:
         else:
             raise ValueError("The number of guests {num_guests} must be less than or equal to 3.")
 
+    @category.setter
+    def category(self, value: RoomCategory) -> None:
+        """
+        Set the room category based on the number of guests.
+
+        Args:
+            value (RoomCategory): The room category to set.
+        """
+        if not isinstance(value, RoomCategory):
+            raise ValueError("Invalid room category.")
+        self._category = value
+
     @property
     def advance(self) -> int:
         """
@@ -72,6 +81,23 @@ class Request:
             int: The number of days in advance the reservation was made.
         """
         return (self.t_reservation - self.t_request).days
+
+    def _map_season(self) -> str:
+        """
+        Determines the season based on the month of the reservation.
+
+        Returns:
+            str: A string indicating the season:
+                 - "high" for months January, February, July, August, September, and December.
+                 - "low" for months March, April, May, June, October, and November.
+                 - "unknown" if the month does not match any of the predefined categories.
+        """
+        if self.t_reservation.month in [1, 2, 7, 8, 9, 12]:
+            return "high"
+        elif self.t_reservation.month in [3, 4, 5, 6, 10, 11]:
+            return "low"
+        # Default case to ensure all code paths return a value
+        return "unknown"
 
 
 if __name__ == "__main__":

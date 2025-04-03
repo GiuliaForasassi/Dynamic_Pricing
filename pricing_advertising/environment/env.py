@@ -1,4 +1,5 @@
 import random
+from copy import deepcopy
 from datetime import date, timedelta
 from typing import ClassVar, cast
 
@@ -13,7 +14,7 @@ from pricing_advertising.exceptions.exceptions import (
     NotValidPeriodError,
 )
 from pricing_advertising.hotel.hotel import Hotel
-from pricing_advertising.hotel.room import RoomCategory
+from pricing_advertising.hotel.room import ROOM_ALTERNATIVES, RoomCategory
 from pricing_advertising.pricing_model.bernstein_model import BernsteinPolynomialModel
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
@@ -45,12 +46,16 @@ class PricingEnv(gym.Env):
         acceptance_model: ABCAcceptanceModel | None = None,
         seed: int | None = None,
     ) -> None:
-        super().__init__()
-
         if start_simulation > end_simulation:
             raise ValueError(
                 f"The start date {start_simulation} must be before the end date {end_simulation}."
             )
+
+        super().__init__()
+
+        self.seed = seed
+        self.np_rng = np.random.default_rng(seed)
+        self.py_rng = random.Random(seed)
 
         # Define the dimensions of the state and action spaces and other vars/structure data you need
         self.num_room_categories = len(RoomCategory)
@@ -69,13 +74,13 @@ class PricingEnv(gym.Env):
                 ),
                 # 1000 da parametrizzare: max customer
                 "demand": gym.spaces.Box(
-                    low=0, high=1000, shape=(self.num_room_categories, self.total_days)
+                    low=0, high=1, shape=(self.num_room_categories, self.total_days)
                 ),
                 # represent a day as a integer number
                 # TODO: coversion sin and cosine
                 "today": gym.spaces.Box(low=0, high=1),
                 # TODO: remember to add seasonality
-                "seasonality": gym.spaces.Box(low=0, high=1),
+                "seasonality": gym.spaces.Discrete(2, seed=seed),
             }
         )
 
@@ -95,10 +100,6 @@ class PricingEnv(gym.Env):
             MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS
         )
         self.hotel = hotel
-
-        self.seed = seed
-        self.np_rng = np.random.default_rng(seed)
-        self.py_rng = random.Random(seed)
 
         # Instantiate the request generator and acceptance model
         self.request_generator = request_generator or RequestGenerator(
@@ -311,7 +312,25 @@ class PricingEnv(gym.Env):
         return np.array(masks)
 
     def _check_alternatives(self, request: Request) -> RoomCategory | None:
-        return None
+        """
+        Checks for alternative room categories if the requested category is unavailable.
+
+        Args:
+            request (Request): The request object containing the desired room category.
+
+        Returns:
+            RoomCategory | None: An alternative room category if available, or None if no alternatives are found
+            or if the requested category is CATEGORY3 (which has no alternatives).
+        """
+        if request.category is RoomCategory.CATEGORY3:
+            return None
+        original_category = request.category
+        alternatives_category = ROOM_ALTERNATIVES.get(original_category, [])
+        for alt_category in alternatives_category:
+            modified_request = deepcopy(request)
+            modified_request.category = alt_category
+            if self.check_hotel_availability(modified_request):
+                return alt_category
 
     def _apply_mask(self, mask: np.ndarray, requests: np.ndarray) -> np.ndarray:
         """
@@ -326,63 +345,86 @@ class PricingEnv(gym.Env):
         """
         return requests[mask.astype(bool)]
 
-    def _generate_prices(self, valid_requests: np.ndarray, action: np.ndarray) -> list[list[float]]:
+    def _generate_prices(
+        self, valid_requests: np.ndarray, actions: np.ndarray
+    ) -> list[list[float]]:
         """
-        Generate prices for a list of valid requests.
+        Generate a list of price predictions for a set of valid requests.
+
+        This method calculates the predicted prices for each request based on
+        the advance days, reservation details, and a pricing model defined by
+        Bernstein polynomial coefficients.
 
         Args:
-            valid_requests (np.ndarray): An array of valid requests. Each request should have the attributes
-                                         `t_reservation` (reservation date), `days_stay` (number of days of stay),
-                                         and a method `get_category()` to get the category of the request.
+            valid_requests (np.ndarray): An array of valid requests, where each
+                request contains details such as reservation time, category, and
+                total reservation days.
 
         Returns:
-            list[list[float]]: A list of lists where each inner list contains the prices for each day of stay for a request.
+            list[list[float]]: A nested list where each inner list contains the
+                predicted prices for each day of the reservation for a specific
+                request.
         """
-
         requests_prices = []
-        pricing_model = BernsteinPolynomialModel(action)
         advances = [extract_advance(req) for req in valid_requests]
         advances = np.array(advances)
+        pricing_model = BernsteinPolynomialModel(actions)  # action are theta coefficients
+
         for advance, request in zip(advances, valid_requests, strict=True):
             request_prices = []
             request = cast(Request, request)
+
             for day_idx in range(request.total_reservation_days):
                 price = pricing_model.predict_price((advance - day_idx) / self.total_days)
                 request_prices.append(price)
             requests_prices.append(request_prices)
         return requests_prices
 
-    def _generate_theta_coefficients(self, category: RoomCategory) -> np.ndarray:
+    def _generate_theta_coefficients(self, category: RoomCategory, season: str) -> np.ndarray:
         """
-        Generate theta coefficients based on the room category.
+        Generate theta coefficients for a given room category and season.
 
-        This method generates an array of theta coefficients using a uniform distribution
-        within a specified range, depending on the provided room category.
+        This method generates an array of random coefficients (theta) based on the
+        specified room category and season. The coefficients are sampled uniformly
+        from predefined ranges depending on the category and season.
 
         Args:
-            category (RoomCategory): The category of the room for which to generate theta coefficients.
-                - RoomCategory.CATEGORY1: Coefficients are uniformly distributed between 0.5 and 2.0.
-                - RoomCategory.CATEGORY2: Coefficients are uniformly distributed between 1.5 and 5.0.
-                - RoomCategory.CATEGORY3: Coefficients are uniformly distributed between 3.0 and 8.0.
+            category (RoomCategory): The category of the room. Must be one of
+                RoomCategory.CATEGORY1, RoomCategory.CATEGORY2, or RoomCategory.CATEGORY3.
+            season (str): The season for which the coefficients are generated.
+                Must be either "low" or "high".
 
         Returns:
-            np.ndarray: An array of theta coefficients.
+            np.ndarray: An array of randomly generated theta coefficients.
 
         Raises:
             InvalidRoomCategoryError: If the provided room category is invalid.
         """
         num_coefficients = NUM_COEFFICIENTS
         rng = np.random.default_rng()
-        if category == RoomCategory.CATEGORY1:
-            theta = rng.uniform(0.5, 2.0, size=num_coefficients)
-        elif category == RoomCategory.CATEGORY2:
-            theta = rng.uniform(1.5, 5.0, size=num_coefficients)
-        elif category == RoomCategory.CATEGORY3:
-            theta = rng.uniform(3.0, 8.0, size=num_coefficients)
-        else:
-            raise InvalidRoomCategoryError(
-                "The room catgory {category} is invalid. Choose one of the available categories."
-            )
+
+        if season == "low":
+            if category == RoomCategory.CATEGORY1:
+                theta = rng.uniform(0.5, 1.5, size=num_coefficients)
+            elif category == RoomCategory.CATEGORY2:
+                theta = rng.uniform(1.0, 3.0, size=num_coefficients)
+            elif category == RoomCategory.CATEGORY3:
+                theta = rng.uniform(2.0, 5.0, size=num_coefficients)
+            else:
+                raise InvalidRoomCategoryError(
+                    "The room catgory {category} is invalid. Choose one of the available categories."
+                )
+        elif season == "high":
+            if category == RoomCategory.CATEGORY1:
+                theta = rng.uniform(1.5, 3.0, size=num_coefficients)
+            elif category == RoomCategory.CATEGORY2:
+                theta = rng.uniform(3.0, 6.0, size=num_coefficients)
+            elif category == RoomCategory.CATEGORY3:
+                theta = rng.uniform(5.0, 9.0, size=num_coefficients)
+            else:
+                raise InvalidRoomCategoryError(
+                    "The room catgory {category} is invalid. Choose one of the available categories."
+                )
         return theta
 
     def _generate_random_prices_for_request(self, request: Request) -> list[float]:

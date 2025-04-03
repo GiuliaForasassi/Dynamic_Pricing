@@ -21,6 +21,7 @@ requires-python = ">=3.12"
     "pygame>=2.6.1",
     "rich>=13.9.4",
     "mlflow>=2.21.2",
+    "optuna>=4.2.1",
 ]
 
 # dependencies needed to lint and run tests

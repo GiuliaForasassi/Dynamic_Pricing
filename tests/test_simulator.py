@@ -8,7 +8,6 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.logger import HumanOutputFormat, Logger
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from pricing_advertising.environment.env import PricingEnv
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.utils.constants import N_ENVS
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
@@ -87,6 +86,6 @@ def run_test_simulation() -> None:
         # mlflow.log_metric("total_reward", total_reward)
 
         # Log a basic artifact
-        with open("simulation_output.txt", "w") as f:
-            f.write(f"Total reward: {total_rewards}")
-        mlflow.log_artifact("simulation_output.txt")
+        # with open("simulation_output.txt", "w") as f:
+        #     f.write(f"Total reward: {total_rewards}")
+        # mlflow.log_artifact("simulation_output.txt")

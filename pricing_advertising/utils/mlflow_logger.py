@@ -23,4 +23,4 @@ class MLflowOutputFormat(KVWriter):
                 continue
 
             if isinstance(value, np.ScalarType) and not isinstance(value, str):
-                mlflow.log_metric(key, value, step)
+                mlflow.log_metric(key, value, step)  # type: ignore

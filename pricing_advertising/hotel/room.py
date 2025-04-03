@@ -36,8 +36,8 @@ if __name__ == "__main__":
         RoomCategory.CATEGORY2,
         RoomCategory.CATEGORY3,
     ], "Incorrect alternatives for CATEGORY1"
-    assert ROOM_ALTERNATIVES[RoomCategory.CATEGORY2] == [
-        RoomCategory.CATEGORY3
-    ], "Incorrect alternatives for CATEGORY2"
+    assert ROOM_ALTERNATIVES[RoomCategory.CATEGORY2] == [RoomCategory.CATEGORY3], (
+        "Incorrect alternatives for CATEGORY2"
+    )
     assert ROOM_ALTERNATIVES[RoomCategory.CATEGORY3] == [], "CATEGORY3 should have no alternatives"
     logger.info("All tests passed successfully!")
