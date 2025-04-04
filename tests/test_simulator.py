@@ -3,13 +3,17 @@ from datetime import date
 
 import mlflow
 import numpy as np
+from loguru import logger
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.logger import HumanOutputFormat, Logger
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from pricing_advertising.hotel.hotel import Hotel
-from pricing_advertising.utils.constants import N_ENVS
+from pricing_advertising.utils.constants import (
+    N_ENVS,
+    SEEDS,
+)
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
 # Assuming that the simulation start the first of the month
@@ -24,17 +28,24 @@ def run_test_simulation() -> None:
         start_simulation = date(2025, 1, 1)
         end_simulation = date(2025, 1, 31)
 
+        # Define hotel parameters
+        num_category1_rooms = 10
+        num_category2_rooms = 20
+        num_category3_rooms = 30
+
+        seed = SEEDS[0]
+        timesteps = 1000
+
         # Log the hyperparameters
         mlflow.log_params(
             {
+                "seed": seed,
                 "start_simulation": start_simulation,
                 "end_simulation": end_simulation,
-                "hotel_rooms": {
-                    "num_category1_rooms": 3,
-                    "num_category2_rooms": 4,
-                    "num_category3_rooms": 3,
-                },
-                "timesteps": 1000,
+                "num_category1_rooms": num_category1_rooms,
+                "num_category2_rooms": num_category2_rooms,
+                "num_category3_rooms": num_category3_rooms,
+                "timesteps": timesteps,
                 "model": "PPO",
                 "policy": "MlpPolicy",
             }
@@ -48,11 +59,12 @@ def run_test_simulation() -> None:
 
         # Initialize the hotel
         hotel = Hotel(
-            num_category1_rooms=3,
-            num_category2_rooms=4,
-            num_category3_rooms=3,
+            num_category1_rooms=num_category1_rooms,
+            num_category2_rooms=num_category2_rooms,
+            num_category3_rooms=num_category3_rooms,
         )
         kwargs = {
+            "seed": seed,
             "start_simulation": start_simulation,
             "end_simulation": end_simulation,
             "hotel": hotel,
@@ -67,20 +79,20 @@ def run_test_simulation() -> None:
 
         model = PPO("MlpPolicy", vec_env, verbose=1)
         model.set_logger(loggers)
-        model.learn(total_timesteps=1000, log_interval=1, progress_bar=True)
+        model.learn(total_timesteps=timesteps, log_interval=1, progress_bar=True)
 
         observations = vec_env.reset()
         total_rewards = np.zeros(N_ENVS)
 
         done = np.zeros(N_ENVS, dtype=bool)
-        while not done[0]:  # check if all have the same time horizon
+        while not np.all(done):
             actions, _ = model.predict(observations, deterministic=True)  # type: ignore
             observations, rewards, done, info = vec_env.step(actions)
-
             total_rewards += rewards
 
         vec_env.close()
-        print("Simulation completed")
+        logger.info(f"Total rewards: {total_rewards}")
+        logger.info("Simulation finished.")
 
         # Log metrics
         # mlflow.log_metric("total_reward", total_reward)

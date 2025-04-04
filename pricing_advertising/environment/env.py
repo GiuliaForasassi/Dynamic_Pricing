@@ -63,10 +63,11 @@ class PricingEnv(gym.Env):
         # Define the dimensions of the state and action spaces and other vars/structure data you need
         self.num_room_categories = len(RoomCategory)
         self.total_days = (end_simulation - start_simulation).days
+        self.extended_simulation_days = self.total_days + NUM_WINDOWS * WINDOW_SIZE
 
         # Demand and Occupancy of the hotel
-        self.occupancy = np.zeros((NUM_CATEGORIES, self.total_days), dtype=int)
-        self.demand = np.zeros((NUM_CATEGORIES, self.total_days), dtype=int)
+        self.occupancy = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
+        self.demand = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
 
         # Define the action and observation space
         # Obsevation space includes hotel occupancy, past demand, seasonality
@@ -115,7 +116,7 @@ class PricingEnv(gym.Env):
 
     def get_observation(self) -> dict:
         current_day_index = (self.today - self.start_simulation).days
-        total_days = self.total_days
+        extended_simulation_days = self.extended_simulation_days
 
         occupancy_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
         demand_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
@@ -125,7 +126,7 @@ class PricingEnv(gym.Env):
             for window in range(NUM_WINDOWS):
                 # Calculate the start and end indices for the current window
                 start = current_day_index + window * WINDOW_SIZE
-                end = min(current_day_index + (window + 1) * WINDOW_SIZE, total_days)
+                end = min(current_day_index + (window + 1) * WINDOW_SIZE, extended_simulation_days)
 
                 # Calculate the occupancy and demand sums for the current window
                 occupancy_sum = np.sum(self.occupancy[category, start:end])
@@ -160,8 +161,8 @@ class PricingEnv(gym.Env):
         """
 
         # Normalize the time
-        if total_days > 0:
-            today_normalized = current_day_index / total_days
+        if extended_simulation_days > 0:
+            today_normalized = current_day_index / extended_simulation_days
 
         seasonality = self.get_seasonality(self.today)  # 0 for low season, 1 for high season
 
@@ -231,7 +232,7 @@ class PricingEnv(gym.Env):
         # Move to the next day
         self.today += timedelta(days=1)
         done = self.today >= self.end_simulation
-        observation = self.observation_space.sample()
+        observation = self.get_observation()
         info: dict = {}  # Placeholder for additional info
 
         return observation, reward, done, info
@@ -263,6 +264,8 @@ class PricingEnv(gym.Env):
 
         # Reset the state of the environment to the initial state
         self.today = self.start_simulation
+        self.occupancy.fill(0)
+        self.demand.fill(0)
 
         # Return the initial observation and info
         return self.observation_space.sample(), {}
@@ -294,12 +297,15 @@ class PricingEnv(gym.Env):
         end_idx = (end_day - self.start_simulation).days
 
         # Check if the period is valid
-        if start_day < self.start_simulation or end_day > self.end_simulation:
+        if start_day < self.start_simulation or end_day > self.start_simulation + timedelta(
+            days=self.extended_simulation_days
+        ):
             raise NotValidPeriodError(
                 start_period=start_day,
                 end_period=end_day,
                 start_simulation=self.start_simulation,
-                end_simulation=self.end_simulation,
+                end_simulation=self.start_simulation
+                + timedelta(days=self.extended_simulation_days),
             )
 
         return bool(
@@ -337,6 +343,11 @@ class PricingEnv(gym.Env):
 
         total_rooms_for_category = self.hotel.get_num_rooms_per_category(category)
 
+        if end_idx > self.extended_simulation_days:
+            raise IndexError(
+                f"The end index {end_idx} exceeds the extended simulation days {self.extended_simulation_days}."
+            )
+
         # Check capacity for each day of the period
         if np.any(self.occupancy[category_idx - 1, start_idx:end_idx] > total_rooms_for_category):
             return False
@@ -366,6 +377,11 @@ class PricingEnv(gym.Env):
             request = cast("Request", request)
             category_idx = request.category.value - 1
             t_reservation_idx = (request.t_reservation - self.start_simulation).days
+            # Check if the reservation index is within the valid range
+            if t_reservation_idx < 0 or t_reservation_idx >= self.extended_simulation_days:
+                raise IndexError(
+                    f"The reservation index {t_reservation_idx} is out of bounds for the extended simulation days {self.extended_simulation_days}."
+                )
             self.demand[category_idx, t_reservation_idx] += 1
 
     def _process_requests(self, requests: np.ndarray) -> np.ndarray:
@@ -456,7 +472,9 @@ class PricingEnv(gym.Env):
             request = cast("Request", request)
 
             for day_idx in range(request.total_reservation_days):
-                price = pricing_model.predict_price((advance - day_idx) / self.total_days)
+                price = pricing_model.predict_price(
+                    (advance - day_idx) / self.extended_simulation_days
+                )
                 request_prices.append(price)
             requests_prices.append(request_prices)
         return requests_prices
