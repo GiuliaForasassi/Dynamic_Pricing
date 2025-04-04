@@ -1,7 +1,7 @@
 import random
 from copy import deepcopy
 from datetime import date, timedelta
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import gymnasium as gym
 import numpy as np
@@ -19,6 +19,7 @@ from pricing_advertising.pricing_model.bernstein_model import BernsteinPolynomia
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
+    HIGH_SEASON,
     LOGISTIC_ACCEPTANCE_AVG_PRICES,
     LOGISTIC_ACCEPTANCE_BETA,
     LOGISTIC_ACCEPTANCE_VARIANCES,
@@ -36,7 +37,7 @@ from pricing_advertising.utils.utils_functions import extract_advance
 
 class PricingEnv(gym.Env):
     # Metadata is a required attribute for the environment
-    metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}
+    metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}  # type: ignore
 
     def __init__(
         self,
@@ -116,19 +117,15 @@ class PricingEnv(gym.Env):
         current_day_index = (self.today - self.start_simulation).days
         total_days = self.total_days
 
-        # 12 windows of 30 days each
-        window_size = WINDOW_SIZE
-        num_windows = NUM_WINDOWS
-
-        occupancy_windows = np.zeros((self.num_room_categories, num_windows), dtype=np.float32)
-        demand_windows = np.zeros((self.num_room_categories, num_windows), dtype=np.float32)
+        occupancy_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
+        demand_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
 
         for category in range(self.num_room_categories):
             num_rooms_category = self.hotel.get_num_rooms_per_category(RoomCategory(category + 1))
-            for window in range(num_windows):
+            for window in range(NUM_WINDOWS):
                 # Calculate the start and end indices for the current window
-                start = current_day_index + window * window_size
-                end = min(current_day_index + (window + 1) * window_size, total_days)
+                start = current_day_index + window * WINDOW_SIZE
+                end = min(current_day_index + (window + 1) * WINDOW_SIZE, total_days)
 
                 # Calculate the occupancy and demand sums for the current window
                 occupancy_sum = np.sum(self.occupancy[category, start:end])
@@ -141,6 +138,27 @@ class PricingEnv(gym.Env):
 
                 demand_windows[category, window] = demand_sum  # qui non ho max demand...???
 
+        """
+        If we can guarantee that there are always at least WINDOW_SIZE * NUM_WINDOWS days of simulation left
+        this can be paralellized like this:
+        normalization_vector = np.array(
+            [
+                self.hotel.get_num_rooms_per_category(RoomCategory(i + 1))
+                for i in range(self.num_room_categories)
+            ]
+        ).reshape(-1, 1)
+        occupancy_windows = (
+            np.sum(
+                self.occupancy[
+                    :, current_day_index : current_day_index + NUM_WINDOWS * WINDOW_SIZE
+                ].reshape(self.num_room_categories, NUM_WINDOWS, WINDOW_SIZE),
+                axis=2,
+            )
+            / normalization_vector
+        )
+        # same for demand_windows
+        """
+
         # Normalize the time
         if total_days > 0:
             today_normalized = current_day_index / total_days
@@ -151,7 +169,7 @@ class PricingEnv(gym.Env):
             "occupancy": occupancy_windows,
             "demand": demand_windows,
             "today": np.array([today_normalized], dtype=np.float32),
-            "seasonality": int(seasonality),
+            "seasonality": seasonality,
         }
 
     def get_seasonality(self, time: date) -> int:
@@ -166,10 +184,10 @@ class PricingEnv(gym.Env):
                  (January, February, July, August, September, or December),
                  otherwise returns 0.
         """
-        return 1 if time.month in [1, 2, 7, 8, 9, 12] else 0
+        return time.month in HIGH_SEASON
 
     # region STEP
-    def step(self, action) -> tuple:
+    def step(self, action) -> tuple:  # noqa: ANN001
         """
         Execute one time step within the environment.
 
@@ -214,13 +232,17 @@ class PricingEnv(gym.Env):
         self.today += timedelta(days=1)
         done = self.today >= self.end_simulation
         observation = self.observation_space.sample()
-        info = {}  # Placeholder for additional info
+        info: dict = {}  # Placeholder for additional info
 
         return observation, reward, done, info
 
     # endregion
 
-    def reset(self, seed: int | None = None) -> tuple:
+    def reset(
+        self,
+        seed: int | None = None,
+        options: dict | None = None,  # noqa: ARG002
+    ) -> tuple[Any, dict[str, Any]]:
         """
         Resets the environment to its initial state.
 
@@ -341,7 +363,7 @@ class PricingEnv(gym.Env):
             None
         """
         for request in requests:
-            request = cast(Request, request)
+            request = cast("Request", request)
             category_idx = request.category.value - 1
             t_reservation_idx = (request.t_reservation - self.start_simulation).days
             self.demand[category_idx, t_reservation_idx] += 1
@@ -370,17 +392,17 @@ class PricingEnv(gym.Env):
 
     def _check_alternatives(self, request: Request) -> RoomCategory | None:
         """
-        Checks for alternative room categories if the requested category is unavailable.
+        Checks for alternative room categories if the requested category is
+        unavailable.
 
         Args:
-            request (Request): The request object containing the desired room category.
+            request (Request): The request object containing the desired room
+            category.
 
         Returns:
-            RoomCategory | None: An alternative room category if available, or None if no alternatives are found
-            or if the requested category is CATEGORY3 (which has no alternatives).
+            RoomCategory | None: An alternative room category if available, or
+            None otherwise.
         """
-        if request.category is RoomCategory.CATEGORY3:
-            return None
         original_category = request.category
         alternatives_category = ROOM_ALTERNATIVES.get(original_category, [])
         for alt_category in alternatives_category:
@@ -388,6 +410,8 @@ class PricingEnv(gym.Env):
             modified_request.category = alt_category
             if self.check_hotel_availability(modified_request):
                 return alt_category
+        # If no alternatives are available, return None
+        return None
 
     def _apply_mask(self, mask: np.ndarray, requests: np.ndarray) -> np.ndarray:
         """
@@ -423,13 +447,13 @@ class PricingEnv(gym.Env):
                 request.
         """
         requests_prices = []
-        advances = [extract_advance(req) for req in valid_requests]
-        advances = np.array(advances)
+        advances = np.array([extract_advance(req) for req in valid_requests])
         pricing_model = BernsteinPolynomialModel(actions)  # action are theta coefficients
 
+        # TODO: This can probably be optimized by using numpy vectorization
         for advance, request in zip(advances, valid_requests, strict=True):
             request_prices = []
-            request = cast(Request, request)
+            request = cast("Request", request)
 
             for day_idx in range(request.total_reservation_days):
                 price = pricing_model.predict_price((advance - day_idx) / self.total_days)
@@ -610,10 +634,10 @@ if __name__ == "__main__":
         logger.info(f"Step time: {step_end - step_start} seconds")
         if done:
             break
-        e_ = time.time()
-        logger.info(f"Time taken: {(e_ - s)} seconds")
+        end_ = time.time()
+        logger.info(f"Time taken: {(end_ - s)} seconds")
     logger.info("Simulation completed.")
 
-    e = time.time()
-    logger.info(f"Time taken: {(e - s) / 100} seconds")
+    end = time.time()
+    logger.info(f"Time taken: {(end - s) / 100} seconds")
 # endregion

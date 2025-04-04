@@ -27,5 +27,5 @@ class SimpleAcceptanceModel(ABCAcceptanceModel):
         else:
             return random() < 0.2
 
-    def _accept_daily_price(self, daily_price: float) -> None:
+    def _accept_daily_price(self, daily_price: float, request: Request) -> None:
         pass

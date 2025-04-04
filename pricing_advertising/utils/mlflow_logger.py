@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, Union
+from typing import Any
 
 import mlflow
 import numpy as np
@@ -12,8 +12,8 @@ class MLflowOutputFormat(KVWriter):
 
     def write(
         self,
-        key_values: Dict[str, Any],
-        key_excluded: Dict[str, Union[str, Tuple[str, ...]]],
+        key_values: dict[str, Any],
+        key_excluded: dict[str, tuple[str, ...]],
         step: int = 0,
     ) -> None:
         for (key, value), (_, excluded) in zip(

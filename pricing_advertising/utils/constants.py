@@ -24,6 +24,9 @@ NUM_COEFFICIENTS = 4
 # Number of room categories
 NUM_CATEGORIES = 3
 
+# Seasonality
+HIGH_SEASON = set([1, 2, 7, 8, 9, 12])
+
 # Factors
 VARIABILITY_MIN_MAX_PRICE = 0.2
 MIN_NUM_REQUESTS_FACTOR = 0.2

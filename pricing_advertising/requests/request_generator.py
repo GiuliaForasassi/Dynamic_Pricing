@@ -69,7 +69,7 @@ class RequestGenerator:
             today += timedelta(days=1)
         return np.array(all_requests)
 
-    def generate_daily_requests(self, today: date) -> np.ndarray:
+    def generate_daily_requests(self, today: date) -> list[Request]:
         """
         Generate a list of requests for a given date.
 
@@ -80,13 +80,13 @@ class RequestGenerator:
             np.ndarray[Request]: A list of generated requests.
         """
         num_requests = self._sample_num_requests()
-        requests = []
+        requests: list[Request] = []
 
         # generation of requests
         for _ in range(num_requests):
             request = self._generate_request(today)
             requests.append(request)
-        return np.array(requests)
+        return requests
 
     def _sample_num_requests(self, size: int = 1) -> int:
         """
