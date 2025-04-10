@@ -117,6 +117,7 @@ class PricingEnv(gym.Env):
     def get_observation(self) -> dict:
         current_day_index = (self.today - self.start_simulation).days
         extended_simulation_days = self.extended_simulation_days
+        end_simulation = self.end_simulation
 
         occupancy_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
         demand_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
@@ -162,7 +163,7 @@ class PricingEnv(gym.Env):
 
         # Normalize the time
         if extended_simulation_days > 0:
-            today_normalized = current_day_index / extended_simulation_days
+            today_normalized = current_day_index / end_simulation
 
         seasonality = self.get_seasonality(self.today)  # 0 for low season, 1 for high season
 
