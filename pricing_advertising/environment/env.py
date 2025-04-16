@@ -37,7 +37,7 @@ from pricing_advertising.utils.utils_functions import extract_advance
 
 class PricingEnv(gym.Env):
     # Metadata is a required attribute for the environment
-    metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}  # type: ignore
+    # metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}  # type: ignore
 
     def __init__(
         self,
@@ -232,11 +232,11 @@ class PricingEnv(gym.Env):
 
         # Move to the next day
         self.today += timedelta(days=1)
-        done = self.today >= self.end_simulation
+        terminated = self.today >= self.end_simulation
         observation = self.get_observation()
         info: dict = {}  # Placeholder for additional info
 
-        return observation, reward, done, info
+        return observation, reward, terminated, False, info
 
     # endregion
 
