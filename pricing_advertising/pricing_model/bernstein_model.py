@@ -1,107 +1,99 @@
 import numpy as np
-from loguru import logger
-from matplotlib import pyplot as plt
 from scipy.special import comb
 
 
-class BernsteinPolynomialModel:
-    def __init__(self, theta: np.ndarray, min_price: float = 1.0) -> None:
+class BernsteinProbModel:
+    def __init__(self, theta: np.ndarray) -> None:
+        """
+        Initializes the object with the given theta values.
+
+        Parameters
+        ----------
+        theta : np.ndarray
+            A NumPy array of non-negative values representing the theta parameters.
+
+        Raises
+        ------
+        TypeError
+            If `theta` is not a NumPy array.
+        ValueError
+            If any value in `theta` is negative or if `theta` is empty.
+
+        Notes
+        -----
+        The input array is converted to float type and stored as an instance attribute.
+        """
         if not isinstance(theta, np.ndarray):
             raise TypeError("Theta values should be a NumPy array")
-        if not np.all(theta >= 0):
+        if np.any(theta < 0):
             raise ValueError("Theta values should be non negative")
         if len(theta) == 0:
             raise ValueError("Theta values should not be empty")
-        if min_price < 0:
-            raise ValueError("Minimum price should be non-negative")
-
-        self.theta = theta
-        self.min_price = min_price
+        self.theta = theta.astype(float)  # Ensure theta is of type float
 
     @property
     def beta(self) -> np.ndarray:
         """
-        Convert θ coefficients to β using cumulative sum.
-        """
-        beta = np.cumsum(self.theta[::-1])[::-1]
-        return beta
-
-    def bernstein_basis_polynomial(self, k: int, advance: np.ndarray | float) -> np.ndarray | float:
-        """
-        Compute the Bernstein basis polynomial of degree `m` for a given index `k` and input `advance`.
-
-        The Bernstein basis polynomial is defined as:
-            B_k^m(advance) = C(m, k) * (advance^k) * ((1 - advance)^(m - k))
-        where C(m, k) is the binomial coefficient.
-
-        Args:
-            k (int): The index of the Bernstein basis polynomial.
-            advance (np.ndarray | float): The input value(s) at which to evaluate the polynomial.
-                Can be a single float or a NumPy array of values.
+        Computes the cumulative sum of the reversed `theta` array.
 
         Returns:
-            np.ndarray | float: The value(s) of the Bernstein basis polynomial evaluated at `advance`.
-                Returns a float if `advance` is a single value, or a NumPy array if `advance` is an array.
+            np.ndarray: The cumulative sum of the elements in `theta`, reversed, resulting in an array of the same shape as `theta`.
+        """
+        return np.cumsum(self.theta[::-1])
 
-        Raises:
-            ValueError: If `k` is negative or greater than the degree `m` of the polynomial.
+    def _bernstein_basis(self, k: int, x: np.ndarray | float) -> np.ndarray | float:
+        """
+        Compute the k-th Bernstein basis polynomial at point(s) x.
+
+        The Bernstein basis polynomial of degree m is defined as:
+            B_{k,m}(x) = C(m, k) * x^k * (1 - x)^(m - k)
+        where C(m, k) is the binomial coefficient, and m is inferred from the length of self.theta.
+
+        Args:
+            k (int): The index of the Bernstein basis polynomial (0 <= k <= m).
+            x (np.ndarray | float): The point(s) at which to evaluate the basis polynomial.
+
+        Returns:
+            np.ndarray | float: The value(s) of the k-th Bernstein basis polynomial at x.
         """
         m = len(self.theta) - 1
-        return float(comb(m, k)) * (advance**k) * ((1 - advance) ** (m - k))
+        return float(comb(m, k)) * (x**k) * ((1 - x) ** (m - k))
 
-    def predict_price(self, advance: np.ndarray | float) -> np.ndarray | float:
+    def _bernstein_polynomial(self, x: np.ndarray) -> np.ndarray:
         """
-        Predicts the price based on the given advance value(s) using a Bernstein polynomial model.
+        Compute the Bernstein polynomial for a given input array.
+
+        This method evaluates the Bernstein polynomial defined by the coefficients `self.beta`
+        at the points specified by `x`. The polynomial is computed as a linear combination
+        of Bernstein basis polynomials of degree `m`, where `m = len(self.beta) - 1`.
 
         Args:
-            advance (np.ndarray | float): The input value(s) representing the advance.
-                It can be a single float or a NumPy array of floats.
+            x (np.ndarray): Input array of points at which to evaluate the Bernstein polynomial.
 
         Returns:
-            np.ndarray | float: The predicted price(s). If the input is a single float,
-                the output will be a float. If the input is a NumPy array, the output
-                will be a NumPy array of the same shape.
+            np.ndarray: The values of the Bernstein polynomial evaluated at each point in `x`.
         """
         beta = self.beta
         m = len(beta) - 1
-        price_values = np.zeros_like(advance, dtype=float)
+        x_arr = np.asarray(x, dtype=float)
+        y = np.zeros_like(x_arr, dtype=float)
         for k in range(m + 1):
-            price_values += beta[k] * self.bernstein_basis_polynomial(k, advance)
-        return np.maximum(price_values, self.min_price)
+            y += beta[k] * self._bernstein_basis(k, x_arr)
+        return y
 
+    def predict_increment_probs(self, occupancy: np.ndarray) -> np.ndarray:
+        """
+        Predicts the incremental probabilities based on the given occupancy values.
 
-if __name__ == "__main__":
-    theta_values = np.array([6, 5, 4, 3, 2, 1, 0], dtype=float)
-    advance_values = np.linspace(0, 1, 10)
+        This method applies a Bernstein polynomial transformation to the input occupancy array,
+        then passes the result through a sigmoid function to obtain probabilities.
 
-    min_price = 2.0
-    model = BernsteinPolynomialModel(theta=theta_values, min_price=min_price)
-    predicted_prices = model.predict_price(advance_values)
+        Args:
+            occupancy (np.ndarray): An array of occupancy values for which to predict incremental probabilities.
 
-    logger.info(f"Predicted prices: {predicted_prices}")
-    logger.info(f"Theta values: {model.theta}")
-
-    assert np.all(predicted_prices >= 0), "Predicted prices should be non-negative"
-    assert np.all(theta_values == model.theta), "Theta values should match the input values"
-
-    try:
-        BernsteinPolynomialModel(theta=np.array([]))  # Should raise ValueError
-    except ValueError as e:
-        logger.info(f"Correctly captured empty theta error: {e}")
-    try:
-        BernsteinPolynomialModel(theta=np.array([1]))  # Should work
-        logger.info("Single-element theta test passed.")
-    except Exception as e:
-        logger.error(f"Single-element theta test failed: {e}")
-    try:
-        BernsteinPolynomialModel(theta=theta_values, min_price=-1)  # Should raise ValueError
-    except ValueError as e:
-        logger.info(f"Correctly caught negative min_price error: {e}")
-
-    plt.plot(advance_values, predicted_prices, label="Predicted Prices")
-    plt.xlabel("Advance days")
-    plt.ylabel("Price")
-    plt.title("Predicted Prices using Bernstein Polynomial Model")
-    plt.legend()
-    plt.grid()
-    plt.show()
+        Returns:
+            np.ndarray: An array of predicted incremental probabilities corresponding to the input occupancy values.
+        """
+        z = self._bernstein_polynomial(occupancy)
+        p = 1 / (1 + np.exp(-z))
+        return p

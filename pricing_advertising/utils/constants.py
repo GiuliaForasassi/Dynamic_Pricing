@@ -41,7 +41,7 @@ NUM_CATEGORIES = 3
 ############### SEASONALITY #####################
 
 # High season months
-HIGH_SEASON = set([1, 2, 7, 8, 9, 12])
+HIGH_SEASON = set([1, 2, 6, 7, 8, 12])
 
 ################# PRICE PARAMETERS ################
 

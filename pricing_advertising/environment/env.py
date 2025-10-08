@@ -15,7 +15,8 @@ from pricing_advertising.exceptions.exceptions import (
 )
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import ROOM_ALTERNATIVES, RoomCategory
-from pricing_advertising.pricing_model.bernstein_model import BernsteinPolynomialModel
+from pricing_advertising.pricing_model.bar_table import BAR_TABLE, n_levels
+from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
@@ -57,37 +58,45 @@ class PricingEnv(gym.Env):
         super().__init__()
 
         self.seed = seed
+        # Initialize the random number generators
         self.np_rng = np.random.default_rng(seed)
         self.py_rng = random.Random(seed)
 
         # Define the dimensions of the state and action spaces and other vars/structure data you need
+        self.start_simulation = start_simulation
+        self.end_simulation = end_simulation
         self.num_room_categories = len(RoomCategory)
         self.total_days = (end_simulation - start_simulation).days
         self.extended_simulation_days = self.total_days + NUM_WINDOWS * WINDOW_SIZE
+        self.hotel = hotel
 
-        # Demand and Occupancy of the hotel
+        # Initialize the state variables
         self.occupancy = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
         self.demand = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
+        self.bar_levels = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
+        self._max_bar_level = n_levels() - 1
+        self.today = start_simulation
 
-        # Define the action and observation space
-        # Obsevation space includes hotel occupancy, past demand, seasonality
+        # Define the action and observation space in Gym
+
+        # OBSERVATION SPACE includes hotel occupancy, past demand, seasonality
         self.observation_space = gym.spaces.Dict(
             {
                 "occupancy": gym.spaces.Box(
-                    low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS)
+                    low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS), dtype=np.float32
                 ),
                 # 1000 da parametrizzare: max customer
                 "demand": gym.spaces.Box(
-                    low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS)
+                    low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS), dtype=np.float32
                 ),
                 # represent a day as a integer number
-                "today": gym.spaces.Box(low=0, high=1),
+                "today": gym.spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32),
                 # seasonality is represented as a discrete value: 0 for low season, 1 for high season
                 "seasonality": gym.spaces.Discrete(2, seed=seed),
             }
         )
 
-        # action space is coefficients of the Bernstein polynomial
+        # ACTION SPACE is coefficients of the Bernstein polynomial
         self.action_space = gym.spaces.Box(
             low=0,
             high=1,
@@ -95,18 +104,14 @@ class PricingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Initiliaze the state
-        self.today = start_simulation
-        self.start_simulation = start_simulation
-        self.end_simulation = end_simulation
+        # External models
         self.avg_num_requests = avg_num_requests or random.randint(
             MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS
         )
-        self.hotel = hotel
 
         # Instantiate the request generator and acceptance model
         self.request_generator = request_generator or RequestGenerator(
-            self.avg_num_requests, end_simulation, distribution=None, seed=seed
+            self.avg_num_requests, start_simulation, end_simulation, distribution=None, seed=seed
         )
         self.acceptance_model = acceptance_model or LogisticAcceptanceModel(
             beta=LOGISTIC_ACCEPTANCE_BETA,
@@ -114,63 +119,41 @@ class PricingEnv(gym.Env):
             variances=LOGISTIC_ACCEPTANCE_VARIANCES,
         )
 
+    # ========== GET OBSERVATION ==========
     def get_observation(self) -> dict:
         current_day_index = (self.today - self.start_simulation).days
-        extended_simulation_days = self.extended_simulation_days
         simulation_days = (self.end_simulation - self.start_simulation).days
+        extended_simulation_days = self.extended_simulation_days
 
         occupancy_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
         demand_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
 
+        # The environment aims to create an “aggregate vision” of the near future for each room category
         for category in range(self.num_room_categories):
-            num_rooms_category = self.hotel.get_num_rooms_per_category(RoomCategory(category + 1))
+            num_rooms = self.hotel.get_num_rooms_per_category(RoomCategory(category + 1))
             for window in range(NUM_WINDOWS):
                 # Calculate the start and end indices for the current window
                 start = current_day_index + window * WINDOW_SIZE
-                end = min(current_day_index + (window + 1) * WINDOW_SIZE, extended_simulation_days)
+                end = min(start + WINDOW_SIZE, extended_simulation_days)
 
-                # Calculate the occupancy and demand sums for the current window
+                # Calculate the occupancy and demand sums for the current window in order to have a aggregate vision
                 occupancy_sum = np.sum(self.occupancy[category, start:end])
                 demand_sum = np.sum(self.demand[category, start:end])
 
                 # Normalize the occupancy and demand values
-                max_possible_occupancy = (end - start) * num_rooms_category
-                if max_possible_occupancy > 0:
-                    occupancy_windows[category, window] = occupancy_sum / max_possible_occupancy
+                max_occupancy = (end - start) * num_rooms
+                if max_occupancy > 0:
+                    occupancy_windows[category, window] = occupancy_sum / max_occupancy
 
-                demand_windows[category, window] = demand_sum  # qui non ho max demand...???
+                demand_windows[category, window] = demand_sum
 
-        """
-        If we can guarantee that there are always at least WINDOW_SIZE * NUM_WINDOWS days of simulation left
-        this can be paralellized like this:
-        normalization_vector = np.array(
-            [
-                self.hotel.get_num_rooms_per_category(RoomCategory(i + 1))
-                for i in range(self.num_room_categories)
-            ]
-        ).reshape(-1, 1)
-        occupancy_windows = (
-            np.sum(
-                self.occupancy[
-                    :, current_day_index : current_day_index + NUM_WINDOWS * WINDOW_SIZE
-                ].reshape(self.num_room_categories, NUM_WINDOWS, WINDOW_SIZE),
-                axis=2,
-            )
-            / normalization_vector
-        )
-        # same for demand_windows
-        """
-
-        # Normalize the time
-        if extended_simulation_days > 0:
-            today_normalized = current_day_index / simulation_days
-
-        seasonality = self.get_seasonality(self.today)  # 0 for low season, 1 for high season
+        today_norm = np.array([current_day_index / max(1, simulation_days)], dtype=np.float32)
+        seasonality = int(self.get_seasonality(self.today))
 
         return {
             "occupancy": occupancy_windows,
             "demand": demand_windows,
-            "today": np.array([today_normalized], dtype=np.float32),
+            "today": today_norm,
             "seasonality": seasonality,
         }
 
@@ -186,9 +169,26 @@ class PricingEnv(gym.Env):
                  (January, February, July, August, September, or December),
                  otherwise returns 0.
         """
-        return time.month in HIGH_SEASON
+        return int(time.month in HIGH_SEASON)
 
-    # region STEP
+    def _stay_indices(self, req: Request) -> tuple[int, int, int]:
+        cat_idx = req.category.value - 1
+        start_idx = (req.t_reservation - self.start_simulation).days
+        end_idx = start_idx + req.days_stay
+
+        if cat_idx < 0 or cat_idx >= self.num_room_categories:
+            raise InvalidRoomCategoryError(req.category.value)
+        if start_idx < 0 or end_idx > self.extended_simulation_days:
+            raise NotValidPeriodError(
+                start_period=req.t_reservation,
+                end_period=req.t_reservation + timedelta(days=req.days_stay),
+                start_simulation=self.start_simulation,
+                end_simulation=self.start_simulation
+                + timedelta(days=self.extended_simulation_days),
+            )
+        return cat_idx, start_idx, end_idx
+
+    # ========== STEP METHOD ==========
     def step(self, action) -> tuple:  # noqa: ANN001
         """
         Execute one time step within the environment.
@@ -238,8 +238,7 @@ class PricingEnv(gym.Env):
 
         return observation, reward, terminated, False, info
 
-    # endregion
-
+    # ========== RESET METHOD ==========
     def reset(
         self,
         seed: int | None = None,
@@ -267,11 +266,12 @@ class PricingEnv(gym.Env):
         self.today = self.start_simulation
         self.occupancy.fill(0)
         self.demand.fill(0)
+        self.bar_levels.fill(0)
 
         # Return the initial observation and info
-        return self.observation_space.sample(), {}
+        return self.get_observation(), {}
 
-    # OTHER FUNCTIONS
+    # ========== OTHER METHODS ==========
     def check_hotel_availability(self, request: Request) -> bool:
         """
         Checks the availability of rooms for a given request.
@@ -443,128 +443,59 @@ class PricingEnv(gym.Env):
         """
         return requests[mask.astype(bool)]
 
+    # ========== UPDATE BAR LEVELS ==========
+    def _update_bar_for_requests(self, actions: np.ndarray) -> None:
+        # 1) Create the Bernstein polynomial models for each room category
+        models: list[BernsteinProbModel] = []
+        for cat_idx in range(self.num_room_categories):
+            theta = np.array(actions[cat_idx], dtype=float)
+            models.append(BernsteinProbModel(theta))
+
+        # 2) Look at each request
+        today_idx = (self.today - self.start_simulation).days
+        end_idx = (self.end_simulation - self.start_simulation).days
+        # end_idx = self.extended_simulation_days # TODO: like above or like this?
+        for cat_idx, category in enumerate(RoomCategory):
+            for day_idx in range(today_idx + 1, end_idx):
+                # 2a) Calculate the occupancy ratio for that day and category
+                rooms = self.hotel.get_num_rooms_per_category(category)
+                occ_ratio = float(self.occupancy[cat_idx, day_idx]) / max(1, rooms)
+                # If for any reason the occupancy ratio is out of bounds, we clip it between 0 and 1
+                occ_ratio = np.clip(occ_ratio, 0.0, 1.0)
+
+                # 2b) Prob to increase the bar level
+                p = models[cat_idx].predict_increment_probs(occ_ratio)
+
+                # 2c) Increase the bar level with probability p --> Bernoulli trial
+                if self.np_rng.random() < p:
+                    self.bar_levels[cat_idx, day_idx] = min(
+                        self.bar_levels[cat_idx, day_idx] + 1, self._max_bar_level
+                    )
+
+    # ========== PRICES GENERATION ==========
     def _generate_prices(
         self, valid_requests: np.ndarray, actions: np.ndarray
     ) -> list[list[float]]:
-        """
-        Generate a list of price predictions for a set of valid requests.
+        # 1) Update bar levels
+        self._update_bar_for_requests(actions)
 
-        This method calculates the predicted prices for each request based on
-        the advance days, reservation details, and a pricing model defined by
-        Bernstein polynomial coefficients.
+        prices_all: list[list[float]] = []
 
-        Args:
-            valid_requests (np.ndarray): An array of valid requests, where each
-                request contains details such as reservation time, category, and
-                total reservation days.
+        # 2) Generate prices for each request
+        for req in valid_requests:
+            req = cast("Request", req)
 
-        Returns:
-            list[list[float]]: A nested list where each inner list contains the
-                predicted prices for each day of the reservation for a specific
-                request.
-        """
-        requests_prices = []
-        advances = np.array([extract_advance(req) for req in valid_requests])
-        pricing_model = BernsteinPolynomialModel(actions)  # action are theta coefficients
+            cat_idx, start_idx, end_idx = self._stay_indices(req)
 
-        # TODO: This can probably be optimized by using numpy vectorization
-        for advance, request in zip(advances, valid_requests, strict=True):
-            request_prices = []
-            request = cast("Request", request)
-
-            for day_idx in range(request.total_reservation_days):
-                price = pricing_model.predict_price(
-                    (advance - day_idx) / self.extended_simulation_days
-                )
-                request_prices.append(price)
-            requests_prices.append(request_prices)
-        return requests_prices
-
-    def _generate_theta_coefficients(self, category: RoomCategory, season: str) -> np.ndarray:
-        """
-        Generate theta coefficients for a given room category and season.
-
-        This method generates an array of random coefficients (theta) based on the
-        specified room category and season. The coefficients are sampled uniformly
-        from predefined ranges depending on the category and season.
-
-        Args:
-            category (RoomCategory): The category of the room. Must be one of
-                RoomCategory.CATEGORY1, RoomCategory.CATEGORY2, or RoomCategory.CATEGORY3.
-            season (str): The season for which the coefficients are generated.
-                Must be either "low" or "high".
-
-        Returns:
-            np.ndarray: An array of randomly generated theta coefficients.
-
-        Raises:
-            InvalidRoomCategoryError: If the provided room category is invalid.
-        """
-        num_coefficients = NUM_COEFFICIENTS
-        rng = np.random.default_rng()
-
-        if season == "low":
-            if category == RoomCategory.CATEGORY1:
-                theta = rng.uniform(0.5, 1.5, size=num_coefficients)
-            elif category == RoomCategory.CATEGORY2:
-                theta = rng.uniform(1.0, 3.0, size=num_coefficients)
-            elif category == RoomCategory.CATEGORY3:
-                theta = rng.uniform(2.0, 5.0, size=num_coefficients)
-            else:
-                raise InvalidRoomCategoryError(
-                    "The room catgory {category} is invalid. Choose one of the available categories."
-                )
-        elif season == "high":
-            if category == RoomCategory.CATEGORY1:
-                theta = rng.uniform(1.5, 3.0, size=num_coefficients)
-            elif category == RoomCategory.CATEGORY2:
-                theta = rng.uniform(3.0, 6.0, size=num_coefficients)
-            elif category == RoomCategory.CATEGORY3:
-                theta = rng.uniform(5.0, 9.0, size=num_coefficients)
-            else:
-                raise InvalidRoomCategoryError(
-                    "The room catgory {category} is invalid. Choose one of the available categories."
-                )
-        return theta
-
-    def _generate_random_prices_for_request(self, request: Request) -> list[float]:
-        """
-        Generate a list of random prices for each day of a reservation request.
-
-        This method generates random daily prices within the range defined by
-        MIN_PRICE and MAX_PRICE for the total number of reservation days specified
-        in the request.
-
-        Args:
-            request (Request): The reservation request object containing details
-                               about the reservation.
-
-        Returns:
-            list[float]: A list of random daily prices for the reservation period.
-        """
-        request_prices = []
-        reservation_days = request.total_reservation_days
-        for _ in range(reservation_days):
-            rng = np.random.default_rng()
-            random_daily_price = rng.uniform(MIN_PRICE, MAX_PRICE)
-            request_prices.append(random_daily_price)
-        return request_prices
-
-    def _generate_random_prices(self, valid_requests: np.ndarray) -> list[list[float]]:
-        """
-        Generate random prices for a list of valid requests.
-
-        Args:
-            valid_requests (np.ndarray): An array of valid requests for which prices need to be generated.
-
-        Returns:
-            list[list[float]]: A list of lists, where each inner list contains the generated prices for a corresponding request.
-        """
-        requests_prices = []
-        for request in valid_requests:
-            request_prices = self._generate_random_prices_for_request(request)
-            requests_prices.append(request_prices)
-        return requests_prices
+            daily_prices: list[float] = []
+            for day_idx in range(start_idx, end_idx):
+                # Take the bar level, that is updated before (point 1)
+                bar_level = int(self.bar_levels[cat_idx, day_idx])
+                # Get the price from the bar table
+                price = BAR_TABLE[req.category][bar_level]
+                daily_prices.append(price)
+            prices_all.append(daily_prices)
+        return prices_all
 
     def _evaluate_prices(
         self, daily_prices: list[list[float]], requests: np.ndarray
@@ -618,45 +549,50 @@ class PricingEnv(gym.Env):
         self.update_hotel_demand(requests)
 
 
-# region MAIN
 if __name__ == "__main__":
+    import time
+    from datetime import date
+
+    import numpy as np
+    from loguru import logger
+
     hotel = Hotel(num_category1_rooms=10, num_category2_rooms=20, num_category3_rooms=30)
 
+    # Sanity check on invalid dates
     try:
-        env_invalid_dates = PricingEnv(
+        _ = PricingEnv(
             start_simulation=date(2025, 12, 31),
             end_simulation=date(2025, 1, 1),
             hotel=hotel,
         )
     except ValueError as e:
-        logger.info("Value error succesfully triggered.")
+        logger.info("ValueError correctly raised for invalid dates.")
         logger.info(e)
 
+    # Valid environment
     env = PricingEnv(
         start_simulation=date(2025, 1, 1),
         end_simulation=date(2025, 1, 31),
         hotel=hotel,
+        seed=42,
     )
 
     obs, info = env.reset()
-    logger.info(f"Initial observation: {obs}")
-    import time
+    logger.info(f"Initial observation OK: keys={list(obs.keys())}")
 
     s = time.time()
-    for _ in range(100):
-        action = env.action_space.sample()
-        logger.info(f"Action: {action}")
-        step_start = time.time()
-        obs, reward, done, info = env.step(action)
-        # logger.info(f"Observation: {obs}, Reward: {reward}, Done: {done}, Info: {info}")
-        step_end = time.time()
-        logger.info(f"Step time: {step_end - step_start} seconds")
-        if done:
-            break
-        end_ = time.time()
-        logger.info(f"Time taken: {(end_ - s)} seconds")
-    logger.info("Simulation completed.")
+    total_reward = 0.0
 
-    end = time.time()
-    logger.info(f"Time taken: {(end - s) / 100} seconds")
-# endregion
+    for step_i in range(100):
+        action = env.action_space.sample()
+        obs, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
+
+        if step_i % 10 == 0:
+            logger.info(f"Step {step_i}: reward={reward:.2f}")
+
+        if terminated or truncated:
+            break
+
+    logger.info(f"Simulation completed. Total reward={total_reward:.2f}")
+    logger.info(f"Avg step time: {(time.time() - s) / (step_i + 1):.4f} sec/step")

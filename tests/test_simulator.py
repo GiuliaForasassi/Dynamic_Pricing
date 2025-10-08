@@ -3,14 +3,15 @@ from datetime import date
 
 import mlflow
 import numpy as np
-import optuna
 from loguru import logger
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.logger import HumanOutputFormat, Logger
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 import pricing_advertising.environment.__init__  # noqa: F401
+
+# import i tuoi oggetti
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.utils.constants import (
     N_ENVS,
@@ -18,19 +19,17 @@ from pricing_advertising.utils.constants import (
 )
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
-# Assuming that the simulation start the first of the month
 
-
-def run_test_simulation(trial: optuna.Trial) -> float:
-    # Test hyperparameters to be optimised
-    timesteps = trial.suggest_int("timesteps", 1000, 10000, step=1000)
-    learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
-    gamma = trial.suggest_float("gamma", 0.8, 0.9999)
+def run_test_simulation() -> float:
+    # Fixed hyperparameters
+    timesteps = 5000
+    learning_rate = 1e-4
+    gamma = 0.99
 
     # Setup MLflow
     mlflow.set_experiment("PricingEnv_Simulation")
 
-    with mlflow.start_run(run_name=f"Trial_{trial.number}"):
+    with mlflow.start_run(run_name="FixedParams_Run"):
         # Define simulation period
         start_simulation = date(2025, 1, 1)
         end_simulation = date(2025, 12, 1)
@@ -78,6 +77,7 @@ def run_test_simulation(trial: optuna.Trial) -> float:
             "end_simulation": end_simulation,
             "hotel": hotel,
         }
+
         vec_env = make_vec_env(
             "PricingEnv-v0",
             n_envs=1,
@@ -108,21 +108,11 @@ def run_test_simulation(trial: optuna.Trial) -> float:
         logger.info("Simulation finished.")
 
         # Log metrics
-        mlflow.log_metric("avg_reward", float(average_reward))
+        mlflow.log_metric("avg_reward", average_reward)
 
         return average_reward
 
-        # Log a basic artifact
-        # with open("simulation_output.txt", "w") as f:
-        #     f.write(f"Total reward: {total_rewards}")
-        # mlflow.log_artifact("simulation_output.txt")
-
 
 if __name__ == "__main__":
-    # Run the test simulation
-    study = optuna.create_study(direction="maximize")
-    study.optimize(run_test_simulation, n_trials=5)
-
-    # Print the best trial
-    print("Best trial:")
-    trial = study.best_trial
+    avg_reward = run_test_simulation()
+    print(f"Simulation completed. Average reward: {avg_reward}")
