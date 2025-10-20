@@ -28,7 +28,6 @@ from pricing_advertising.utils.constants import (
     MAX_PRICE,
     MIN_AVG_NUM_REQUESTS,
     MIN_PRICE,
-    NUM_CATEGORIES,
     NUM_COEFFICIENTS,
     NUM_WINDOWS,
     WINDOW_SIZE,
@@ -57,29 +56,45 @@ class PricingEnv(gym.Env):
 
         super().__init__()
 
+        # ============ RANDOM AND SEED SETUP ============
         self.seed = seed
-        # Initialize the random number generators
         self.np_rng = np.random.default_rng(seed)
         self.py_rng = random.Random(seed)
 
-        # Define the dimensions of the state and action spaces and other vars/structure data you need
+        # ============ SIMULATION HORIZON AND HOTEL ============
         self.start_simulation = start_simulation
         self.end_simulation = end_simulation
-        self.num_room_categories = len(RoomCategory)
-        self.total_days = (end_simulation - start_simulation).days
-        self.extended_simulation_days = self.total_days + NUM_WINDOWS * WINDOW_SIZE
-        self.hotel = hotel
+        self.window_span_days = NUM_WINDOWS * WINDOW_SIZE
+        self.extended_end_simulation = end_simulation + timedelta(days=self.window_span_days)
 
-        # Initialize the state variables
-        self.occupancy = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
-        self.demand = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
-        self.bar_levels = np.zeros((NUM_CATEGORIES, self.extended_simulation_days), dtype=int)
-        self._max_bar_level = n_levels() - 1
+        self.total_days = (end_simulation - start_simulation).days
+        self.extended_simulation_days = self.total_days + self.window_span_days
+
+        self.hotel = hotel
+        self.num_room_categories = len(RoomCategory)
+
+        # ============ STATE VARIABLES ============
         self.today = start_simulation
+        self.n_levels = n_levels()
+        self._max_bar_level = self.n_levels - 1
+
+        self.occupancy = np.zeros(
+            (self.num_room_categories, self.extended_simulation_days), dtype=int
+        )
+        self.demand = np.zeros((self.num_room_categories, self.extended_simulation_days), dtype=int)
+        self.bar_levels = np.zeros(
+            (self.num_room_categories, self.extended_simulation_days), dtype=int
+        )
+        # Pre-calculation of bar_table: in this way I don't have recalculate at each step
+        self.bar_table = np.zeros((self.num_room_categories, self.n_levels), dtype=float)
+        for cat_idx, category in enumerate(RoomCategory):
+            prices = np.array(BAR_TABLE[category], dtype=np.float32)
+            max_price = float(prices.max())
+            self.bar_table[cat_idx, :] = prices / max(1, max_price)
 
         # Define the action and observation space in Gym
 
-        # OBSERVATION SPACE includes hotel occupancy, past demand, seasonality
+        # =========== OBSERVATION SPACE ============
         self.observation_space = gym.spaces.Dict(
             {
                 "occupancy": gym.spaces.Box(
@@ -93,10 +108,21 @@ class PricingEnv(gym.Env):
                 "today": gym.spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32),
                 # seasonality is represented as a discrete value: 0 for low season, 1 for high season
                 "seasonality": gym.spaces.Discrete(2, seed=seed),
+                # DYNAMIC: FOR EACH WINDOW
+                # profile of BARs by category and by window --> represents where we are (current status)
+                "bar_levels": gym.spaces.Box(
+                    low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS), dtype=np.float32
+                ),
+                # STATIC: FOR EACH CATEGORY
+                # price scale in the BAR table by category --> tells you how much it is worth to go up +1 bar in that category
+                "bar_table": gym.spaces.Box(
+                    low=0, high=1, shape=(self.num_room_categories, self.n_levels), dtype=np.float32
+                ),
             }
         )
 
-        # ACTION SPACE is coefficients of the Bernstein polynomial
+        # =========== ACTION SPACE ============
+        # Action space is coefficients of the Bernstein polynomial
         self.action_space = gym.spaces.Box(
             low=0,
             high=1,
@@ -104,15 +130,25 @@ class PricingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # External models
+        # =========== REQUEST GENERATOR AND ACCEPTANCE MODEL ============
         self.avg_num_requests = avg_num_requests or random.randint(
             MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS
         )
 
         # Instantiate the request generator and acceptance model
         self.request_generator = request_generator or RequestGenerator(
-            self.avg_num_requests, start_simulation, end_simulation, distribution=None, seed=seed
+            self.avg_num_requests,
+            start_simulation,
+            end_simulation,
+            extended_end_simulation=self.extended_end_simulation,
+            distribution=None,
+            seed=seed,
+            precompute=True,  # always precompute requests at the beginning
         )
+
+        if request_generator is not None:
+            self.request_generator.ensure_precomputed()
+
         self.acceptance_model = acceptance_model or LogisticAcceptanceModel(
             beta=LOGISTIC_ACCEPTANCE_BETA,
             avg_prices=LOGISTIC_ACCEPTANCE_AVG_PRICES,
@@ -123,38 +159,62 @@ class PricingEnv(gym.Env):
     def get_observation(self) -> dict:
         current_day_index = (self.today - self.start_simulation).days
         simulation_days = (self.end_simulation - self.start_simulation).days
-        extended_simulation_days = self.extended_simulation_days
 
         occupancy_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
         demand_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
+        bar_levels_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
 
         # The environment aims to create an “aggregate vision” of the near future for each room category
         for category in range(self.num_room_categories):
             num_rooms = self.hotel.get_num_rooms_per_category(RoomCategory(category + 1))
+
             for window in range(NUM_WINDOWS):
                 # Calculate the start and end indices for the current window
                 start = current_day_index + window * WINDOW_SIZE
-                end = min(start + WINDOW_SIZE, extended_simulation_days)
+                end = min(start + WINDOW_SIZE, self.extended_simulation_days)
+                width = max(0, end - start)
+                if width == 0:
+                    continue
 
                 # Calculate the occupancy and demand sums for the current window in order to have a aggregate vision
                 occupancy_sum = np.sum(self.occupancy[category, start:end])
                 demand_sum = np.sum(self.demand[category, start:end])
 
                 # Normalize the occupancy and demand values
-                max_occupancy = (end - start) * num_rooms
-                if max_occupancy > 0:
-                    occupancy_windows[category, window] = occupancy_sum / max_occupancy
+                max_occupancy = max(1, num_rooms * width)
+                max_demand = max(1, width * self.avg_num_requests)
+                occupancy_norm = occupancy_sum / max_occupancy
+                demand_norm = demand_sum / max_demand
 
-                demand_windows[category, window] = demand_sum
+                occupancy_windows[category, window] = np.float32(occupancy_norm)
+                demand_windows[category, window] = np.float32(demand_norm)
 
-        today_norm = np.array([current_day_index / max(1, simulation_days)], dtype=np.float32)
+                # Bar levels
+                bl = self.bar_levels[category, start:end]
+                if bl.size > 0 and self._max_bar_level > 0:
+                    bar_levels_windows[category, window] = np.float32(
+                        bl.mean() / self._max_bar_level
+                    )
+
+        today_norm = np.array(
+            [min(1.0, max(0.0, current_day_index / max(1, simulation_days)))],
+            dtype=np.float32,
+        )
+
         seasonality = int(self.get_seasonality(self.today))
+
+        # Clip for security
+        occupancy_windows = np.clip(occupancy_windows, 0.0, 1.0)
+        demand_windows = np.clip(demand_windows, 0.0, 1.0)
+        bar_levels_windows = np.clip(bar_levels_windows, 0.0, 1.0)
 
         return {
             "occupancy": occupancy_windows,
             "demand": demand_windows,
             "today": today_norm,
             "seasonality": seasonality,
+            "bar_levels": bar_levels_windows,  # dynamic
+            "bar_table": self.bar_table,  # static: pre-calcolated in the constructor
         }
 
     def get_seasonality(self, time: date) -> int:
@@ -338,7 +398,7 @@ class PricingEnv(gym.Env):
         end_day = start_day + timedelta(days=days_stay)
 
         # Get the corresponding indexes
-        category_idx = category.value
+        category_idx = category.value - 1
         start_idx = (start_day - self.start_simulation).days
         end_idx = (end_day - self.start_simulation).days
 
@@ -350,11 +410,11 @@ class PricingEnv(gym.Env):
             )
 
         # Check capacity for each day of the period
-        if np.any(self.occupancy[category_idx - 1, start_idx:end_idx] > total_rooms_for_category):
+        if np.any(self.occupancy[category_idx, start_idx:end_idx] >= total_rooms_for_category):
             return False
 
         # Update the occupancy matrix for the specified category and period
-        self.occupancy[category_idx - 1, start_idx:end_idx] += 1
+        self.occupancy[category_idx, start_idx:end_idx] += 1
         return True
 
     def update_hotel_demand(self, requests: np.ndarray) -> None:
@@ -588,8 +648,7 @@ if __name__ == "__main__":
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
 
-        if step_i % 10 == 0:
-            logger.info(f"Step {step_i}: reward={reward:.2f}")
+        logger.info(f"Step {step_i}: reward={reward:.2f}")
 
         if terminated or truncated:
             break

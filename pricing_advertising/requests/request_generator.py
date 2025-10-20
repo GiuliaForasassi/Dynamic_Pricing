@@ -1,5 +1,7 @@
 import random
 from datetime import date, timedelta
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
 from loguru import logger
@@ -24,15 +26,28 @@ class RequestGenerator:
         avg_num_requests: int,
         start_simulation: date,
         end_simulation: date,
+        extended_end_simulation: date,
         seasonality_func: np.ndarray | None = None,
         distribution: rv_continuous | None = None,
         seed: int | None = None,
+        # constructuctor parameter: if True, precompute all requests at the start
+        # If true, all requests for the entire simulation period are precomputed during initialization.
+        # If false (on-demand generation), requests are generated as needed for each day (old logic)
+        precompute: bool = True,
     ) -> None:
-        if not isinstance(end_simulation, date):
-            raise ValueError("The end_simulation must be a date object")
+        if not isinstance(end_simulation, date) or not isinstance(start_simulation, date):
+            raise ValueError("The start_simulation and the end_simulation must be date objects")
 
         if avg_num_requests < 0:
             raise ValueError("The average number of requests must be greater than 0")
+
+        # Check using differences in days (no operators < is on dates -> Pylance)
+        delta_main = (end_simulation - start_simulation).days
+        delta_extended = (extended_end_simulation - start_simulation).days
+        if delta_main <= 0 or delta_extended < 0:
+            raise ValueError(
+                "Must be valid: start_simulation < end_simulation < extendend_end_simulation"
+            )
 
         self.seed = seed
         self.rng: Generator = default_rng(seed)
@@ -40,12 +55,14 @@ class RequestGenerator:
         self.avg_num_requests = int(avg_num_requests)
         self.start_simulation = start_simulation
         self.end_simulation = end_simulation
+        self.extended_end_simulation = extended_end_simulation
 
         self.seasonality_func = (
             seasonality_func.astype(float)
             if seasonality_func is not None
             else np.ones(365, dtype=float)
         ).astype(float)
+
         if self.seasonality_func.shape != (365,):
             raise ValueError("`seasonality_func` must be a vector of length 365")
 
@@ -59,32 +76,38 @@ class RequestGenerator:
             )
         )
 
+        # ============ PRECOMPUTATION (if needed) ============
+        # Dictionary to store precomputed requests by day
+        self.requests_by_day: dict[date, list[Request]] = {}
+        if precompute:
+            self._pre_generate_all_requests()
+
     # ============ METHODS TO USE IN THE ENV ============
     def generate_requests(self, today: date) -> np.ndarray:
-        """Genera SOLO le richieste del giorno `today` (array dtype=object, anche vuoto)."""
-        return np.array(self.generate_requests_arriving_today(today), dtype=object)
+        return np.array(self.requests_by_day.get(today, []), dtype=object)
 
-    def generate_requests_arriving_today(self, today: date) -> list[Request]:
-        if not isinstance(today, date):
-            raise ValueError("today must be a date")
-        days_left = (self.end_simulation - today).days
-        if days_left <= 1:
-            # No requests can be made on the last day or if there's no time left
-            return []
+    def ensure_precomputed(self) -> None:
+        """Ensure that all requests have been precomputed."""
+        if not getattr(self, "requests_by_day", {}):
+            self._pre_generate_all_requests()
 
-        # Sample the number of requests for today
-        num_requests = self._sample_num_requests(today)
-        requests: list[Request] = []
+    # ============ PRECOMPUTATION HELPERS ============
+    def _pre_generate_all_requests(self) -> None:
+        current = self.start_simulation
+        while current < self.end_simulation:  # t_request must be < end_simulation
+            num_requests = self._sample_num_requests(current)
+            requests: list[Request] = []
+            for _ in range(num_requests):
+                request = self._generate_request(current)
+                if request is not None:
+                    requests.append(request)
+            # Store only if there are requests
+            if requests:
+                self.requests_by_day[current] = requests
+            current += timedelta(days=1)
 
-        # generation of requests
-        for _ in range(num_requests):
-            request = self._generate_request(today)
-            if request is not None:
-                requests.append(request)
-        return requests
-
-    # ============ SAMPLING HELPERS ============
-    def _sample_num_requests(self, today: date, size: int = 1) -> int:
+    # ============ SAMPLING THE NUMBER OF REQUESTS ============
+    def _sample_num_requests(self, today: date) -> int:
         day_of_year = today.timetuple().tm_yday - 1  # 0-indexed: 0-364
         # Get the seasonality factor for the current day
         seasonality_factor = float(self.seasonality_func[day_of_year])
@@ -102,10 +125,14 @@ class RequestGenerator:
         num_requests = int(np.round(max(sample, min_num_requests)))
         return num_requests
 
+    # ============ ONE REQUEST GENERATION ============
     def _generate_request(self, today: date) -> Request | None:
-        maximum_advance = (self.end_simulation - self.start_simulation).days
+        remaining_from_today = (self.extended_end_simulation - today).days
+        if remaining_from_today <= 1:
+            return None  # No more requests can be made
+
         # Possible advances are between 1 and maximum_advance - 1
-        possible_advances = np.arange(1, maximum_advance, dtype=int)
+        possible_advances = np.arange(1, remaining_from_today, dtype=int)
         # Weights for the advances are linearly decreasing
         weights = np.arange(len(possible_advances), 0, -1, dtype=float)
         # Normalize the weights to get probabilities
@@ -115,11 +142,10 @@ class RequestGenerator:
         # Reservation date
         t_reservation = today + timedelta(days=advance_days)
         # Days that can be booked
-        remaining_days_from_reservation = (self.end_simulation - t_reservation).days
-        max_stay = int(min(MAX_DAYS_STAY, max(1, remaining_days_from_reservation)))
-        # Ensure there's enough space for at least one night
-        if max_stay < 1:
-            return None
+        remaining_days_from_reservation = (self.extended_end_simulation - t_reservation).days
+        if remaining_days_from_reservation < 0:
+            return None  # No days left to stay
+        max_stay = int(min(MAX_DAYS_STAY, remaining_days_from_reservation))
         days_stay = int(self.rng.integers(1, max_stay + 1))  # [1, max_stay]
         # Number of guests can be 1, 2 or 3
         num_guests = self.rng.integers(MIN_GUESTS, MAX_GUESTS)
@@ -134,8 +160,10 @@ class RequestGenerator:
 # ============ TEST ============
 if __name__ == "__main__":
     # ---- Parametri di test ----
-    END_SIM = date(2025, 1, 31)
     START_SIM = date(2025, 1, 1)
+    END_SIM = date(2025, 1, 31)
+    W_EXT = 30
+    EXT_END_SIM = END_SIM + (timedelta(days=W_EXT))
     SEED = 42
     AVG_REQ = 12
 
@@ -146,68 +174,68 @@ if __name__ == "__main__":
         avg_num_requests=AVG_REQ,
         start_simulation=START_SIM,
         end_simulation=END_SIM,
+        extended_end_simulation=EXT_END_SIM,
         seasonality_func=seasonality,
         seed=SEED,
+        precompute=True,
     )
 
+    def validate_request(r: Request, today: date) -> None:
+        # campi presenti
+        assert hasattr(r, "t_request")
+        assert hasattr(r, "t_reservation")
+
+        # t_request è il giorno 'today' (e per definizione < END_SIM)
+        assert r.t_request == today
+
+        # check-in (t_reservation) entro l'orizzonte esteso
+        assert today < r.t_reservation < EXT_END_SIM, (
+            "t_reservation deve essere > today e < extended_end_simulation"
+        )
+
+        # soggiorno: deve concludersi entro EXT_END_SIM
+        remaining_after_res = (EXT_END_SIM - r.t_reservation).days
+        assert 1 <= r.days_stay <= min(MAX_DAYS_STAY, remaining_after_res)
+
+        # ospiti (NumPy: upper bound escluso)
+        assert MIN_GUESTS <= r.num_guests < MAX_GUESTS
+
     def check_requests(today: date) -> np.ndarray:
-        """Genera e valida le richieste per 'today'."""
+        """Legge e valida le richieste precompute per 'today'."""
         arr = rg.generate_requests(today)
-        logger.info(f"[{today}] generated {len(arr)} requests")
-
-        # Deve essere un ndarray (anche vuoto), dtype=object
-        assert isinstance(arr, np.ndarray), "generate_requests deve restituire un np.ndarray"
-        assert arr.dtype == object, f"dtype atteso object, trovato {arr.dtype}"
-
+        print(f"[{today}] generated {len(arr)} requests")
+        assert isinstance(arr, np.ndarray)
+        assert arr.dtype == object
         for r in arr:
-            # Tipi base
-            assert hasattr(r, "t_request"), "Request mal formata: manca t_request"
-            assert hasattr(r, "t_reservation"), "Request mal formata: manca t_reservation"
-            assert r.t_request == today, "t_request deve essere il 'today' passato al generatore"
-
-            # Vincoli temporali
-            assert today < r.t_reservation <= END_SIM, (
-                "t_reservation deve essere dopo oggi e entro end_simulation"
-            )
-
-            # days_stay: 'giorni da considerare dopo la data iniziale'
-            # -> consentiamo sia 0 che >=1, ma mai negativo
-            assert r.days_stay >= 0, "days_stay non può essere negativo"
-
-            # Non deve sforare l’orizzonte (inclusivo sul calendario)
-            remaining_after_res = (END_SIM - r.t_reservation).days
-            assert r.days_stay <= remaining_after_res, (
-                f"days_stay={r.days_stay} sfora end_sim: restano {remaining_after_res} giorni dopo la reservation"
-            )
-
-            # Rispetta i limiti globali
-
-            assert r.days_stay <= MAX_DAYS_STAY, "days_stay oltre MAX_DAYS_STAY"
-            assert MIN_GUESTS <= r.num_guests <= MAX_GUESTS, "num_guests fuori range"
-
+            validate_request(r, today)
         return arr
 
-    # ---- 1) Giorno “normale” nel mezzo dell’orizzonte ----
+    print("=== RequestGenerator self-test (extended horizon) ===")
+    print(f"start={START_SIM}  end={END_SIM}  ext_end={EXT_END_SIM}  avg={AVG_REQ}  seed={SEED}")
+
+    # ---- 1) A ‘normal’ day in the middle of the period ----
     _ = check_requests(date(2025, 1, 10))
 
-    # ---- 2) Penultimo giorno utile (edge case) ----
-    _ = check_requests(
-        END_SIM - timedelta(days=2)
-    )  # 29 gen → ci deve essere ancora qualche richiesta possibile
+    # ---- 2) END_SIM day - 2 (may have requests with check-in after END_SIM) ----
+    _ = check_requests(END_SIM - timedelta(days=2))
 
-    # ---- 3) Ultimo giorno (nessuna richiesta) ----
-    arr_last = rg.generate_requests(END_SIM)
-    logger.info(f"[{END_SIM}] generated {len(arr_last)} requests (atteso 0)")
-    assert isinstance(arr_last, np.ndarray)
-    assert arr_last.dtype == object
-    assert len(arr_last) == 0, "All'ultimo giorno non dovrebbero esserci richieste generabili"
+    # ---- 3) Day END_SIM - 1 (ORA may have requests) ----
+    arr_last_useful = rg.generate_requests(END_SIM - timedelta(days=1))
+    print(
+        f"[{END_SIM - timedelta(days=1)}] generated {len(arr_last_useful)} requests (può essere > 0)"
+    )
+    assert isinstance(arr_last_useful, np.ndarray)
+    assert arr_last_useful.dtype == object
+    for r in arr_last_useful:
+        validate_request(r, END_SIM - timedelta(days=1))
 
-    # ---- 4) Piccolo smoke test su più giorni consecutivi ----
-    total = 0
-    today = date(2025, 1, 1)
-    while today < END_SIM:
-        total += len(rg.generate_requests(today))
-        today += timedelta(days=1)
-    logger.info(f"Total requests over the month: {total}")
+    # ---- 4) Day = END_SIM (out of range for t_request) → always 0 ----
+    arr_end = rg.generate_requests(END_SIM)
+    print(f"[{END_SIM}] generated {len(arr_end)} requests (atteso 0)")
+    assert isinstance(arr_end, np.ndarray)
+    assert arr_end.dtype == object
+    assert len(arr_end) == 0
 
-    logger.info("RequestGenerator quick test: OK ✅")
+    total_dict = sum(len(v) for v in rg.requests_by_day.values())
+    print(f"Total requests (dict) = {total_dict}")
+    print("Self-test completed successfully ✅")

@@ -87,7 +87,13 @@ def run_test_simulation() -> float:
         )
 
         model = PPO(
-            "MultiInputPolicy", vec_env, verbose=1, learning_rate=learning_rate, gamma=gamma
+            "MultiInputPolicy",
+            vec_env,
+            verbose=1,
+            learning_rate=learning_rate,
+            gamma=gamma,
+            n_epochs=1,
+            n_steps=100,
         )
         model.set_logger(loggers)
         model.learn(total_timesteps=timesteps, log_interval=1, progress_bar=True)
