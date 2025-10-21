@@ -83,12 +83,22 @@ class RequestGenerator:
             self._pre_generate_all_requests()
 
     # ============ METHODS TO USE IN THE ENV ============
-    def generate_requests(self, today: date) -> np.ndarray:
+    def fetch_requests_for_date(self, today: date) -> np.ndarray:
         return np.array(self.requests_by_day.get(today, []), dtype=object)
 
     def ensure_precomputed(self) -> None:
         """Ensure that all requests have been precomputed."""
         if not getattr(self, "requests_by_day", {}):
+            self._pre_generate_all_requests()
+
+    def regenerate(self, seed: int | None = None) -> None:
+        if seed is not None:
+            self.seed = seed
+            # re-seed
+            self.rng = default_rng(self.seed)
+            self.py_rng = random.Random(self.seed)
+            # Clear old requests and generate again
+            self.requests_by_day.clear()
             self._pre_generate_all_requests()
 
     # ============ PRECOMPUTATION HELPERS ============
@@ -202,7 +212,7 @@ if __name__ == "__main__":
 
     def check_requests(today: date) -> np.ndarray:
         """Legge e valida le richieste precompute per 'today'."""
-        arr = rg.generate_requests(today)
+        arr = rg.fetch_requests_for_date(today)
         print(f"[{today}] generated {len(arr)} requests")
         assert isinstance(arr, np.ndarray)
         assert arr.dtype == object
@@ -220,7 +230,7 @@ if __name__ == "__main__":
     _ = check_requests(END_SIM - timedelta(days=2))
 
     # ---- 3) Day END_SIM - 1 (ORA may have requests) ----
-    arr_last_useful = rg.generate_requests(END_SIM - timedelta(days=1))
+    arr_last_useful = rg.fetch_requests_for_date(END_SIM - timedelta(days=1))
     print(
         f"[{END_SIM - timedelta(days=1)}] generated {len(arr_last_useful)} requests (può essere > 0)"
     )
@@ -230,7 +240,7 @@ if __name__ == "__main__":
         validate_request(r, END_SIM - timedelta(days=1))
 
     # ---- 4) Day = END_SIM (out of range for t_request) → always 0 ----
-    arr_end = rg.generate_requests(END_SIM)
+    arr_end = rg.fetch_requests_for_date(END_SIM)
     print(f"[{END_SIM}] generated {len(arr_end)} requests (atteso 0)")
     assert isinstance(arr_end, np.ndarray)
     assert arr_end.dtype == object

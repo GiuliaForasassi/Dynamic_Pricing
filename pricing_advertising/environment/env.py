@@ -85,12 +85,6 @@ class PricingEnv(gym.Env):
         self.bar_levels = np.zeros(
             (self.num_room_categories, self.extended_simulation_days), dtype=int
         )
-        # Pre-calculation of bar_table: in this way I don't have recalculate at each step
-        self.bar_table = np.zeros((self.num_room_categories, self.n_levels), dtype=float)
-        for cat_idx, category in enumerate(RoomCategory):
-            prices = np.array(BAR_TABLE[category], dtype=np.float32)
-            max_price = float(prices.max())
-            self.bar_table[cat_idx, :] = prices / max(1, max_price)
 
         # Define the action and observation space in Gym
 
@@ -112,11 +106,6 @@ class PricingEnv(gym.Env):
                 # profile of BARs by category and by window --> represents where we are (current status)
                 "bar_levels": gym.spaces.Box(
                     low=0, high=1, shape=(self.num_room_categories, NUM_WINDOWS), dtype=np.float32
-                ),
-                # STATIC: FOR EACH CATEGORY
-                # price scale in the BAR table by category --> tells you how much it is worth to go up +1 bar in that category
-                "bar_table": gym.spaces.Box(
-                    low=0, high=1, shape=(self.num_room_categories, self.n_levels), dtype=np.float32
                 ),
             }
         )
@@ -172,7 +161,7 @@ class PricingEnv(gym.Env):
                 # Calculate the start and end indices for the current window
                 start = current_day_index + window * WINDOW_SIZE
                 end = min(start + WINDOW_SIZE, self.extended_simulation_days)
-                width = max(0, end - start)
+                width = max(1, end - start)
                 if width == 0:
                     continue
 
@@ -214,7 +203,6 @@ class PricingEnv(gym.Env):
             "today": today_norm,
             "seasonality": seasonality,
             "bar_levels": bar_levels_windows,  # dynamic
-            "bar_table": self.bar_table,  # static: pre-calcolated in the constructor
         }
 
     def get_seasonality(self, time: date) -> int:
@@ -265,7 +253,7 @@ class PricingEnv(gym.Env):
         """
 
         # Generate requests for the current day
-        requests = self.request_generator.generate_requests(self.today)
+        requests = self.request_generator.fetch_requests_for_date(self.today)
 
         # Check if the requests can be accommodated
         valid_mask = self._process_requests(requests)
@@ -321,6 +309,19 @@ class PricingEnv(gym.Env):
             self.py_rng = random.Random(seed)
 
         super().reset(seed=seed)  # requires this call to control randomness and reproducibility
+
+        # Regenerate requests (if it's required)
+        if options is None:
+            options = {}
+        regen = bool(options.get("new_requests", False))
+        if regen:
+            requests_seed = options.get("requests_seed", seed if seed is not None else self.seed)
+            # If RG supports regenerate() use it
+            if hasattr(self.request_generator, "regenerate"):
+                self.request_generator.regenerate(seed=requests_seed)
+            else:
+                self.request_generator.requests_by_day.clear()
+                self.request_generator._pre_generate_all_requests()  # noqa: SLF001
 
         # Reset the state of the environment to the initial state
         self.today = self.start_simulation
@@ -607,6 +608,10 @@ class PricingEnv(gym.Env):
         requests (np.ndarray): An array of requests generated for the current day.
         """
         self.update_hotel_demand(requests)
+
+    # ========== HELPER FOR DOING PLOTS ==========
+    def get_num_rooms_per_category(self, category: RoomCategory) -> int:
+        return self.hotel.get_num_rooms_per_category(category)
 
 
 if __name__ == "__main__":

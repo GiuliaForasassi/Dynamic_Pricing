@@ -13,6 +13,7 @@ import pricing_advertising.environment.__init__  # noqa: F401
 
 # import i tuoi oggetti
 from pricing_advertising.hotel.hotel import Hotel
+from pricing_advertising.plots.plot_callback import PlotCallback
 from pricing_advertising.utils.constants import (
     N_ENVS,
     SEEDS,
@@ -21,27 +22,27 @@ from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
 
 def run_test_simulation() -> float:
-    # Fixed hyperparameters
+    # ============ FIXED HYPERPARAMETERS ============
     timesteps = 5000
     learning_rate = 1e-4
     gamma = 0.99
 
-    # Setup MLflow
+    # ============ SIMULATION PERIOD ============
+    start_simulation = date(2025, 1, 1)
+    end_simulation = date(2025, 6, 1)
+
+    # ============ HOTEL INFO ============
+    num_category1_rooms = 40
+    num_category2_rooms = 30
+    num_category3_rooms = 35
+
+    # ============ SEED ============
+    seed = SEEDS[0]
+
+    # ============ MLFLOW SETUP ============
     mlflow.set_experiment("PricingEnv_Simulation")
-
     with mlflow.start_run(run_name="FixedParams_Run"):
-        # Define simulation period
-        start_simulation = date(2025, 1, 1)
-        end_simulation = date(2025, 12, 1)
-
-        # Define hotel parameters
-        num_category1_rooms = 10
-        num_category2_rooms = 20
-        num_category3_rooms = 30
-
-        seed = SEEDS[0]
-
-        # Log the hyperparameters
+        # ============ Logger the hyperparameters ============
         mlflow.log_params(
             {
                 "seed": seed,
@@ -58,34 +59,35 @@ def run_test_simulation() -> float:
             }
         )
 
-        # Logger setup
-        loggers = Logger(
+        # ============ Logger setup ============
+        logger = Logger(
             folder=None,
             output_formats=[HumanOutputFormat(sys.stdout), MLflowOutputFormat()],
         )
 
-        # Initialize the hotel
+        # ============ Construct the env ============
         hotel = Hotel(
             num_category1_rooms=num_category1_rooms,
             num_category2_rooms=num_category2_rooms,
             num_category3_rooms=num_category3_rooms,
         )
 
-        kwargs = {
-            "seed": seed,
-            "start_simulation": start_simulation,
-            "end_simulation": end_simulation,
-            "hotel": hotel,
-        }
+        env_kwargs = dict(
+            seed=seed,
+            start_simulation=start_simulation,
+            end_simulation=end_simulation,
+            hotel=hotel,
+        )
 
         vec_env = make_vec_env(
             "PricingEnv-v0",
             n_envs=1,
-            env_kwargs=kwargs,
+            env_kwargs=env_kwargs,
             vec_env_cls=SubprocVecEnv,
             vec_env_kwargs={"start_method": "fork"},
         )
 
+        # ============ Model ============
         model = PPO(
             "MultiInputPolicy",
             vec_env,
@@ -95,20 +97,27 @@ def run_test_simulation() -> float:
             n_epochs=1,
             n_steps=100,
         )
-        model.set_logger(loggers)
-        model.learn(total_timesteps=timesteps, log_interval=1, progress_bar=True)
+        model.set_logger(logger)
 
+        # ============ Train ============
+        callback = PlotCallback(log_to_mlflow=True)
+        model.learn(total_timesteps=timesteps, callback=callback, log_interval=1, progress_bar=True)
+
+        # ============ Evaluation rollout to collect metrics/graphs ============
         observations = vec_env.reset()
-        total_rewards = np.zeros(N_ENVS)
+        n_envs = vec_env.num_envs
+        done = np.zeros(n_envs, dtype=bool)
+        total_rewards = np.zeros(n_envs, dtype=float)
 
-        done = np.zeros(N_ENVS, dtype=bool)
         while not np.all(done):
             actions, _ = model.predict(observations, deterministic=True)  # type: ignore
-            observations, rewards, done, info = vec_env.step(actions)
+            # infos is a list of dict: one for each active env
+            observations, rewards, done, infos = vec_env.step(actions)
             total_rewards += rewards
-
         vec_env.close()
+
         average_reward = float(np.mean(total_rewards))
+
         logger.info(f"Total rewards: {total_rewards}")
         logger.info(f"Average reward: {average_reward}")
         logger.info("Simulation finished.")
