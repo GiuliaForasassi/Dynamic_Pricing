@@ -55,7 +55,7 @@ class Request:
         elif num_guests == 3:
             return RoomCategory.CATEGORY3
         else:
-            raise ValueError("The number of guests {num_guests} must be less than or equal to 3.")
+            raise ValueError(f"The number of guests {num_guests} must be less than or equal to 3.")
 
     @category.setter
     def category(self, value: RoomCategory) -> None:

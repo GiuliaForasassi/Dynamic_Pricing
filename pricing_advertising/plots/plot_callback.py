@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import mlflow
 import numpy as np
@@ -13,6 +13,7 @@ from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.plots.plot import plot_and_log_figures
 from pricing_advertising.requests.request import Request
+from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import NUM_COEFFICIENTS
 
 
@@ -66,26 +67,50 @@ class PlotCallback(BaseCallback):
 
     # 1) INITIAL REQUESTS
     def _log_initial_requests_from_generator(self, env_idx: int) -> None:
-        gen = self._get_attr("request_generator", env_idx)
+        # Take from the env the request_generator
+        gen = cast(RequestGenerator | None, self._get_attr("request_generator", env_idx))
+        # Take from the env the dates of start and end simulation
         start_sim = self._get_attr("start_simulation", env_idx)
         end_sim = self._get_attr("end_simulation", env_idx)
 
         if gen is None or start_sim is None or end_sim is None:
             return
 
-        counts = defaultdict(int)
+        # If gen has the method we call it in order to ensure that requests_by_day is not empty
+        if (
+            gen is not None
+            and hasattr(gen, "ensure_precomputed")
+            and callable(gen.ensure_precomputed)
+        ):
+            gen.ensure_precomputed()
+
+        # Counter for each category
+        counts: dict[RoomCategory, int] = {cat: 0 for cat in RoomCategory}
         current = start_sim
+        # Loop in the simulation period
         while current < end_sim:
+            # Take the requests generated for that day
             reqs = gen.requests_by_day.get(current, [])
+            # Loop of the requests
             for r in reqs:
-                cat = r.category  # <-- usa la proprietà già definita in Request
-                idx = cat.value if hasattr(cat, "value") else int(cat)
-                counts[idx - 1] += 1
+                cat = r.category
+                counts[cat] += 1
             current += timedelta(days=1)
 
-        # Log nel dataframe per plot.py
-        for c_idx, total in sorted(counts.items()):
-            self._append_row(env_idx, 0, str(c_idx + 1), "initial_requests", float(total))
+        total_requests = sum(counts.values())
+        print(f"[Env {env_idx}] Total number of requests: {total_requests}")
+
+        # Sort the counters by key (category)
+        for cat in sorted(counts.keys(), key=lambda c: c.value):
+            # Number of total requests for that category
+            total = counts[cat]
+            self._append_row(
+                env_idx=env_idx,
+                day_idx=0,
+                category=str(cat.value),
+                kind="initial_requests",
+                value=float(total),
+            )
 
     # 2) OCCUPANCY DISTRIBUTION
     def _log_occupancy_dist_sample(
@@ -156,7 +181,7 @@ class PlotCallback(BaseCallback):
         actions = np.asarray(actions, dtype=np.float64)
         num_room_categories = self._get_attr("num_room_categories", idx)
         actions = actions.reshape(num_room_categories, NUM_COEFFICIENTS)
-        actions = np.clip(actions, 0.0, 1.0)  # <<< importante
+        actions = np.clip(actions, 0.0, 1.0)
         prices_all = self._env_method("_generate_prices", np.array([req]), actions, idx=idx)
         if not prices_all or not prices_all[0]:
             return None
@@ -194,10 +219,23 @@ class PlotCallback(BaseCallback):
         raw_actions = self.locals.get("actions")
         actions_np = None
         if raw_actions is not None:
-            try:
+            raw = np.asarray(raw_actions, dtype=float)
+            # prendi gli spazi azione dei sotto-env (lista lunga n_envs)
+            action_spaces = self.training_env.get_attr("action_space")
+            # usa il primo env (indice 0)
+            low = np.asarray(action_spaces[0].low, dtype=float)
+            high = np.asarray(action_spaces[0].high, dtype=float)
+
+            # riscalatura: [-1,1]  ->  [low, high]
+            env_actions = low + (raw + 1.0) * 0.5 * (high - low)
+
+            print("min/max raw:", raw.min(), raw.max())
+            print("min/max env:", env_actions.min(), env_actions.max())
+            print("action_space low/high:", low[:5], high[:5])
+            """  try:
                 actions_np = np.asarray(raw_actions, dtype=float)
             except Exception:
-                actions_np = None
+                actions_np = None """
 
         for env_idx in range(n_envs):
             today = self._get_attr("today", env_idx)

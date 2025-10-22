@@ -3,6 +3,7 @@ import io
 import matplotlib.pyplot as plt
 import mlflow
 import pandas as pd
+from matplotlib.container import BarContainer
 
 
 def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
@@ -13,12 +14,17 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         plt.close()
 
     # ========== 1) Requests for each category ==========
+    # Filter the original dataframe keeping only the rows about initial requests
     d = df[df["kind"] == "initial_requests"]
     if not d.empty:
-        plt.figure()
-        d.groupby("category", sort=False)["value"].sum().plot(kind="bar")
-        plt.title("Requests for each category")
-        plt.ylabel("Requests number")
+        d = d.copy()
+        d["category"] = d["category"].astype(int)
+        s = d.groupby("category")["value"].sum().sort_index()
+        ax = s.plot(kind="bar")
+        ax.set(title="Requests for each category", xlabel="Category", ylabel="Number of requests")
+        for c in ax.containers:  # type: ignore
+            c: BarContainer
+            ax.bar_label(c, fmt="%d", padding=2)
         plt.tight_layout()
         log_fig("01_Initial_Requests")
 

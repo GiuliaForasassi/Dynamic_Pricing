@@ -158,7 +158,7 @@ class RequestGenerator:
         max_stay = int(min(MAX_DAYS_STAY, remaining_days_from_reservation))
         days_stay = int(self.rng.integers(1, max_stay + 1))  # [1, max_stay]
         # Number of guests can be 1, 2 or 3
-        num_guests = self.rng.integers(MIN_GUESTS, MAX_GUESTS)
+        num_guests = self.rng.integers(MIN_GUESTS, MAX_GUESTS, endpoint=True)
         return Request(
             t_request=today,
             t_reservation=t_reservation,
