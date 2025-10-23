@@ -1,4 +1,5 @@
 import random
+from collections import Counter
 from copy import deepcopy
 from datetime import date, timedelta
 from typing import Any, ClassVar, cast
@@ -144,6 +145,15 @@ class PricingEnv(gym.Env):
             variances=LOGISTIC_ACCEPTANCE_VARIANCES,
         )
 
+        # Attribute for counting accepted/rejected requests
+        self.accepted_by_day = np.zeros(
+            (self.num_room_categories, self.extended_simulation_days), dtype=np.int32
+        )
+        self.rejected_by_day = np.zeros_like(self.accepted_by_day)
+
+        self.accepted_total = 0
+        self.rejected_total = 0
+
     # ========== GET OBSERVATION ==========
     def get_observation(self) -> dict:
         current_day_index = (self.today - self.start_simulation).days
@@ -275,6 +285,34 @@ class PricingEnv(gym.Env):
         final_requests = self._apply_mask(occupancy_mask, accepted_requests)
         final_prices = self._apply_mask(occupancy_mask, accepted_prices)
 
+        # =========================To calculate accepted requests======================
+
+        current_day_index = (self.today - self.start_simulation).days
+
+        # tot richieste processabili oggi (dopo availability)
+        tot_per_cat = Counter(r.category.value - 1 for r in valid_requests)
+        # effettivamente confermate (dopo acceptance + occupancy)
+        acc_per_cat = Counter(r.category.value - 1 for r in final_requests)
+
+        if 0 <= current_day_index < self.extended_simulation_days:
+            for c in range(self.num_room_categories):
+                accepted_c = int(acc_per_cat.get(c, 0))
+                rejected_c = max(int(tot_per_cat.get(c, 0) - accepted_c), 0)
+
+                self.accepted_by_day[c, current_day_index] += accepted_c
+                self.rejected_by_day[c, current_day_index] += rejected_c
+                self.accepted_total += accepted_c
+                self.rejected_total += rejected_c
+
+        # (facoltativo) debug print ogni 30 giorni
+        if (current_day_index % 30) == 0:
+            print(
+                f"[ACCEPT-COUNT] day={current_day_index} acc_today={sum(acc_per_cat.values())} "
+                f"rej_today={sum(tot_per_cat.values()) - sum(acc_per_cat.values())} "
+                f"acc_total={self.accepted_total} rej_total={self.rejected_total}"
+            )
+        # =============================================================================
+
         # Calculate the revenue of accepted requests
         reward = self._calculate_reward(final_prices, final_requests)  # to fix
 
@@ -328,6 +366,10 @@ class PricingEnv(gym.Env):
         self.occupancy.fill(0)
         self.demand.fill(0)
         self.bar_levels.fill(0)
+        self.accepted_by_day.fill(0)
+        self.rejected_by_day.fill(0)
+        self.accepted_total = 0
+        self.rejected_total = 0
 
         # Return the initial observation and info
         return self.get_observation(), {}

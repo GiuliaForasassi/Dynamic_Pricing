@@ -74,9 +74,9 @@ LOGISTIC_ACCEPTANCE_AVG_PRICES = {
 
 # 1/4 of the avg price
 LOGISTIC_ACCEPTANCE_VARIANCES = {
-    1: 25,
-    2: 37.5,
-    3: 50,
+    1: 900,
+    2: 2025,
+    3: 3600,
 }
 
 ################# ENVIRONMENT PARAMETERS ####################

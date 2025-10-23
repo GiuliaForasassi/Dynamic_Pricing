@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import timedelta
 from typing import Any, cast
 
@@ -9,7 +8,6 @@ import numpy as np
 import pandas as pd
 from stable_baselines3.common.callbacks import BaseCallback
 
-from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.plots.plot import plot_and_log_figures
 from pricing_advertising.requests.request import Request
@@ -18,13 +16,14 @@ from pricing_advertising.utils.constants import NUM_COEFFICIENTS
 
 
 class PlotCallback(BaseCallback):
-    def __init__(self, log_to_mlflow: bool = True, occ_hist_samples: int = 40) -> None:
+    def __init__(self, log_to_mlflow: bool = True) -> None:
         super().__init__()
         self.n_envs: int | None = None  # type hint per Pylance
         self.rows: list[dict[str, Any]] = []
         self.log_to_mlflow = log_to_mlflow
-        self.occ_hist_samples = occ_hist_samples
         self._num_rooms_cache: dict[int, list[int]] = {}
+        # Store the pairs (category, day) already logged for each env
+        self._occ_seen: dict[int, set[tuple[int, int]]] = {}
 
     # ========== HELPER FUNCTIONS FOR SubprocVecEnv ==========
 
@@ -41,7 +40,7 @@ class PlotCallback(BaseCallback):
     ) -> None:
         self.rows.append(
             {
-                "date": int(day_idx),
+                "day": int(day_idx),
                 "category": category,
                 "kind": kind,
                 "value": float(value),
@@ -113,38 +112,129 @@ class PlotCallback(BaseCallback):
             )
 
     # 2) OCCUPANCY DISTRIBUTION
-    def _log_occupancy_dist_sample(
-        self, env_idx: int, current_day_index: int, num_rooms: list[int]
-    ) -> None:
-        # 1) Read from the env the info you need
+    def _log_occupancy_dist(self, env_idx: int) -> None:
         simulation_days = self._get_attr("total_days", env_idx)
-        occ = self._get_attr("occupancy", env_idx)  # shape: (num_cat, extended_days)
-        # use only the real horizon
-        occ_h = occ[:, :simulation_days]  # shape: (num_cat, simulation_days)
+        if simulation_days is None:
+            return
 
+        # prendi direttamente la matrice occupancy (shape: num_cat × extended_days)
+        occ = self._get_attr("occupancy", env_idx)
+        if occ is None:
+            return
+
+        occ_h = occ[:, :simulation_days]  # usa solo i giorni reali
         C, D = occ_h.shape
+        num_rooms = self._get_num_rooms_by_cat(env_idx)
 
-        # 3) Sample uniformly across the horizon (category, day)
-        total = C * D
-        sample_size = min(self.occ_hist_samples, total)
-        rng = np.random.default_rng()
-        idx_flat = rng.choice(total, size=sample_size, replace=False)
-        cats = idx_flat // D
-        days = idx_flat % D
+        # controlla se i valori sono già frazioni 0–1
+        mx = float(np.nanmax(occ_h)) if occ_h.size else 0.0
+        already_fraction = mx <= 1.0 + 1e-6
 
-        # 4) Normalise with the number of rooms in the correct category
-        for c, d in zip(cats, days, strict=True):
-            denom = max(1, num_rooms[c])
-            v = float(occ_h[c, d] / denom)
+        for c in range(C):
+            denom = max(1, int(num_rooms[c]))
+            for d in range(D):
+                raw = float(occ_h[c, d])
+
+                # se già normalizzato → usa così, altrimenti normalizza
+                v = np.clip(raw, 0.0, 1.0) if already_fraction else np.clip(raw / denom, 0.0, 1.0)
+
+                self._append_row(
+                    env_idx=env_idx,
+                    day_idx=int(d),
+                    category=str(c + 1),
+                    kind="occupancy_dist",
+                    value=float(v),
+                )
+
+    # 3) ACCEPTANCE
+    def _log_acceptance_counts(self, env_idx: int) -> None:
+        """
+        Logga i conteggi Accepted/Rejected (per categoria + totale) a fine training.
+        Richiede idealmente che l'env esponga:
+        - accepted_by_day: np.ndarray (C, extended_days) di interi
+        - rejected_by_day: np.ndarray (C, extended_days) di interi
+        Fallback: prova attributi cumulativi se le matrici non esistono.
+        """
+        simulation_days = self._get_attr("total_days", env_idx)
+        if simulation_days is None:
+            return
+
+        # Prova matrici per giorno (preferite)
+        acc = None
+        rej = None
+        try:
+            acc = self._get_attr("accepted_by_day", env_idx)
+            rej = self._get_attr("rejected_by_day", env_idx)
+        except Exception:
+            acc = None
+            rej = None
+
+        if acc is not None and rej is not None:
+            acc_h = acc[:, :simulation_days]  # shape (C, D)
+            rej_h = rej[:, :simulation_days]
+            C, D = acc_h.shape
+
+            # Per categoria
+            for c in range(C):
+                accepted_c = int(acc_h[c].sum())
+                rejected_c = int(rej_h[c].sum())
+                self._append_row(
+                    env_idx,
+                    day_idx=D - 1,
+                    category=str(c + 1),
+                    kind="accepted_count",
+                    value=float(accepted_c),
+                )
+                self._append_row(
+                    env_idx,
+                    day_idx=D - 1,
+                    category=str(c + 1),
+                    kind="rejected_count",
+                    value=float(rejected_c),
+                )
+
+            # Totale "all"
+            accepted_all = int(acc_h.sum())
+            rejected_all = int(rej_h.sum())
             self._append_row(
                 env_idx,
-                int(current_day_index),
-                str(c + 1),
-                "occupancy_dist_sample",
-                v,
+                day_idx=D - 1,
+                category="all",
+                kind="accepted_count",
+                value=float(accepted_all),
             )
+            self._append_row(
+                env_idx,
+                day_idx=D - 1,
+                category="all",
+                kind="rejected_count",
+                value=float(rejected_all),
+            )
+            return
 
-    # 3) PRICES
+        # ---- Fallback: solo cumulativi (se non hai le matrici) ----
+        # Prova attributi cumulativi nell'env, se li hai
+        try:
+            accepted_all = int(self._get_attr("accepted_total", env_idx))
+            rejected_all = int(self._get_attr("rejected_total", env_idx))
+            D = int(simulation_days)
+            self._append_row(
+                env_idx,
+                day_idx=D - 1,
+                category="all",
+                kind="accepted_count",
+                value=float(accepted_all),
+            )
+            self._append_row(
+                env_idx,
+                day_idx=D - 1,
+                category="all",
+                kind="rejected_count",
+                value=float(rejected_all),
+            )
+        except Exception:
+            # Ultimo fallback: niente da loggare
+            return
 
     # 4) ACTION CURVE
     def _log_action_curve(
@@ -212,7 +302,7 @@ class PlotCallback(BaseCallback):
 
     # ========== CALLBACK SB3 ==========
 
-    # ========== On Step ==========
+    # ========== ON STEP ==========
     def _on_step(self) -> bool:
         n_envs = self.training_env.num_envs
         # 1) Normnalize actions
@@ -257,11 +347,10 @@ class PlotCallback(BaseCallback):
                 self._log_action_curve(env_idx, current_day_index, num_cats, actions_env)
                 self._log_probe_prices(env_idx, current_day_index, num_cats, actions_env)
             self._log_occupancy_pct(env_idx, current_day_index, num_cats, num_rooms)
-            self._log_occupancy_dist_sample(env_idx, current_day_index, num_rooms)
 
         return True
 
-    # ========== On Training ==========
+    # ========== ON TRAINING START ==========
     def _on_training_start(self) -> None:
         if self.n_envs is None:
             self.n_envs = getattr(self.training_env, "num_envs", 1)
@@ -269,16 +358,23 @@ class PlotCallback(BaseCallback):
         for env_idx in range(n_envs):
             self._log_initial_requests_from_generator(env_idx)
 
+    # ========== ON TRAINING END ==========
     def on_training_end(self) -> None:
+        n_envs = self.training_env.num_envs
+
+        # 1) Add the occupancy raws for each env
+        for env_idx in range(n_envs):
+            self._log_occupancy_dist(env_idx)
+            self._log_acceptance_counts(env_idx)
+
+        # 2) Create the dataframe
         if not self.rows:
             return
         df = pd.DataFrame(self.rows)
 
-        # if you want to aggregate all env in a single chart, that's fine
-        # if you want to separate by env, you can filter by the env column
-        csv_text = df.to_csv(index=False)
+        # 3) Save the CSV
         if self.log_to_mlflow:
-            mlflow.log_text(csv_text, "episode_log.csv")
+            mlflow.log_text(df.to_csv(index=False), "episode_log.csv")
 
-        # Generates and logs images
+        # 4) Generates plots
         plot_and_log_figures(df, log_to_mlflow=self.log_to_mlflow)

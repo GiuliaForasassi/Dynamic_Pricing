@@ -17,22 +17,50 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         self.variances = variances
         # can add season_factor to handle the seasonality of the prices
 
+        # --- DEBUG counters ---
+        self._dbg_seen = 0
+        self._dbg_acc = 0
+
     def _accept(self, proposed_price: float, request: Request) -> bool:
         category = request.category
-        avg_price = self.avg_prices[category.value]
+        los = max(1, int(request.days_stay))
+        proposed_daily = proposed_price / los
+
         variance = self.variances[category.value]
+        avg_price = self.avg_prices[category.value]
 
         reference_price = self.generate_reference_price(category=category)
 
         acceptance_probability = self.logistic_function(
             reference_price=reference_price,
-            proposed_price=proposed_price,
+            proposed_price=proposed_daily,
             beta=self.beta,
             variance=variance,
             avg_price=avg_price,
         )
         random_number = random.random()
-        return random_number <= acceptance_probability
+        accepted = random_number <= acceptance_probability
+
+        # --- DEBUG SECTION ---
+        self._dbg_seen += 1
+        self._dbg_acc += int(accepted)
+
+        # Ogni 500 richieste stampa il tasso di accettazione medio
+        if self._dbg_seen % 500 == 0:
+            rate = self._dbg_acc / self._dbg_seen
+            print(f"[ACCEPT-STAT] seen={self._dbg_seen} acc_rate={rate:.2%}")
+
+        # Stampa il dettaglio di alcune richieste (1% circa)
+        if random.random() < 0.01:
+            std = np.sqrt(variance)
+            print(
+                f"[ACCEPT-DBG] cat={category.value} avg={avg_price:.1f} ref={reference_price:.1f} "
+                f"prop={proposed_price:.1f} std={std:.2f} beta={self.beta:.2f} "
+                f"p={acceptance_probability:.3f} accepted={accepted}"
+            )
+        # --- END DEBUG SECTION ---
+
+        return accepted
 
     def _accept_daily_price(self, daily_price: float, request: Request) -> bool:
         return self._accept(daily_price, request)
@@ -59,8 +87,12 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         # Calculate the correction factor based on the reference price
         correction_factor = (reference_price - avg_price) / np.sqrt(variance)
 
+        # x measures how the proposed price is below or above the reference price
+        x = beta * (z_score - correction_factor)
+        # clippo in order to prevent overflow/underflow
+        x = np.clip(x, -60, 60)
         # Calculate the acceptance probability
-        acceptance_probability = 1 / (1 + np.exp(beta * (z_score - correction_factor)))
+        acceptance_probability = 1 / (1 + np.exp(x))
         return acceptance_probability
 
 

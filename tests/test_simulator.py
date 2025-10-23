@@ -32,9 +32,9 @@ def run_test_simulation() -> float:
     end_simulation = date(2025, 6, 1)
 
     # ============ HOTEL INFO ============
-    num_category1_rooms = 40
-    num_category2_rooms = 30
-    num_category3_rooms = 35
+    num_category1_rooms = 25
+    num_category2_rooms = 25
+    num_category3_rooms = 25
 
     # ============ SEED ============
     seed = SEEDS[0]
