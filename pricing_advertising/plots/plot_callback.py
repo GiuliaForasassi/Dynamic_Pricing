@@ -10,6 +10,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from pricing_advertising.hotel.room import RoomCategory
 from pricing_advertising.plots.plot import plot_and_log_figures
+from pricing_advertising.pricing_model.bar_table import BAR_TABLE
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import NUM_COEFFICIENTS
@@ -84,25 +85,48 @@ class PlotCallback(BaseCallback):
             gen.ensure_precomputed()
 
         # Counter for each category
-        counts: dict[RoomCategory, int] = {cat: 0 for cat in RoomCategory}
+        totals_by_cat: dict[RoomCategory, int] = {cat: 0 for cat in RoomCategory}
         current = start_sim
         # Loop in the simulation period
         while current < end_sim:
             # Take the requests generated for that day
             reqs = gen.requests_by_day.get(current, [])
-            # Loop of the requests
+            day_idx = (current - start_sim).days
+            total_today = len(reqs)
+            self._append_row(
+                env_idx=env_idx,
+                day_idx=day_idx,
+                category="all",
+                kind="requests_daily_total",
+                value=int(total_today),
+            )
+
+            #
+            per_cat_today: dict[int, int] = {}
             for r in reqs:
-                cat = r.category
-                counts[cat] += 1
+                cat_val = r.category.value
+                per_cat_today[cat_val] = per_cat_today.get(cat_val, 0) + 1
+
+            for cval, cnt in per_cat_today.items():
+                self._append_row(
+                    env_idx=env_idx,
+                    day_idx=day_idx,
+                    category=str(cval),
+                    kind="requests_daily_cat",
+                    value=float(cnt),
+                )
+
+            for r in reqs:
+                totals_by_cat[r.category] += 1
             current += timedelta(days=1)
 
-        total_requests = sum(counts.values())
+        total_requests = sum(totals_by_cat.values())
         print(f"[Env {env_idx}] Total number of requests: {total_requests}")
 
         # Sort the counters by key (category)
-        for cat in sorted(counts.keys(), key=lambda c: c.value):
+        for cat in sorted(totals_by_cat.keys(), key=lambda c: c.value):
             # Number of total requests for that category
-            total = counts[cat]
+            total = totals_by_cat[cat]
             self._append_row(
                 env_idx=env_idx,
                 day_idx=0,
@@ -145,6 +169,18 @@ class PlotCallback(BaseCallback):
                     kind="occupancy_dist",
                     value=float(v),
                 )
+
+    # OCCUPANCY PERCENTAGE AT EACH DAY
+    def _log_occupancy_pct(
+        self, env_idx: int, current_day_index: int, num_cats: int, num_rooms: list[int]
+    ) -> None:
+        occupancy = self._get_attr("occupancy", env_idx)
+        for cat_idx in range(num_cats):
+            occ_raw = float(occupancy[cat_idx, current_day_index])
+            percentage = occ_raw / max(1, num_rooms[cat_idx]) * 100.0
+            self._append_row(
+                env_idx, current_day_index, f"Cat{cat_idx + 1}", "occupancy_pct", percentage
+            )
 
     # 3) ACCEPTANCE
     def _log_acceptance_counts(self, env_idx: int) -> None:
@@ -212,8 +248,7 @@ class PlotCallback(BaseCallback):
             )
             return
 
-        # ---- Fallback: solo cumulativi (se non hai le matrici) ----
-        # Prova attributi cumulativi nell'env, se li hai
+        # ---- Fallback
         try:
             accepted_all = int(self._get_attr("accepted_total", env_idx))
             rejected_all = int(self._get_attr("rejected_total", env_idx))
@@ -233,72 +268,77 @@ class PlotCallback(BaseCallback):
                 value=float(rejected_all),
             )
         except Exception:
-            # Ultimo fallback: niente da loggare
             return
 
     # 4) ACTION CURVE
     def _log_action_curve(
         self, env_idx: int, current_day_index: int, num_cats: int, actions_env: np.ndarray
     ) -> None:
+        vals: list[float] = []
         for cat_idx in range(num_cats):
             try:
                 action_val = float(np.mean(actions_env[cat_idx]))
             except Exception:
                 action_val = float(actions_env)
+            vals.append(action_val)
             self._append_row(
                 env_idx, current_day_index, f"Cat{cat_idx + 1}", "action_curve", action_val
             )
+        # Generic curve: mean of all category
+        try:
+            overall = float(np.mean(actions_env))
+        except Exception:
+            overall = float(np.mean(vals))
+        self._append_row(
+            env_idx=env_idx,
+            day_idx=current_day_index,
+            category="All",
+            kind="action_curve",
+            value=overall,
+        )
+
+    # 5) PRICES FOR ADVANCES
+    def _log_probe_prices(
+        self, env_idx: int, current_day_index: int, num_cats: int, actions_env: np.ndarray
+    ) -> None:
+        """
+        Logga il prezzo 'quote' per una notte alla data today+advance, per ogni categoria.
+        NON modifica lo stato dell'env (niente update dei BAR!).
+        """
+        for k in (1, 15, 60):
+            for cat_val in range(1, num_cats + 1):
+                p = self._probe_price_for_advance(env_idx, k, RoomCategory(cat_val))
+                if p is not None:
+                    self._append_row(env_idx, current_day_index, f"Cat{cat_val}", f"advance_{k}", p)
 
     def _probe_price_for_advance(
-        self, idx: int, advance: int, category: RoomCategory, actions: np.ndarray
+        self, idx: int, advance: int, category: RoomCategory
     ) -> float | None:
+        """
+        Restituisce il prezzo (1 notte) alla data today+advance per 'category',
+        calcolato dal BAR corrente, SENZA aggiornare livelli/bar o altro.
+        """
         today = self._get_attr("today", idx)
+        start_sim = self._get_attr("start_simulation", idx)
         extended_end_simulation = self._get_attr("extended_end_simulation", idx)
+        bar_levels = self._get_attr("bar_levels", idx)
 
+        # calcolo l’indice del giorno di prenotazione (reservation day)
         res_date = today + timedelta(days=advance)
         if res_date >= extended_end_simulation:
             return None
 
-        # richiesta fittizia (1 notte) coerente con la tua Request
-        req = Request(
-            t_request=today,
-            t_reservation=res_date,
-            days_stay=1,
-            num_guests=category.value,
-        )
-
-        # chiamiamo il metodo dell'env nel subprocesso (ritorna list[list[float]])
-        actions = np.asarray(actions, dtype=np.float64)
-        num_room_categories = self._get_attr("num_room_categories", idx)
-        actions = actions.reshape(num_room_categories, NUM_COEFFICIENTS)
-        actions = np.clip(actions, 0.0, 1.0)
-        prices_all = self._env_method("_generate_prices", np.array([req]), actions, idx=idx)
-        if not prices_all or not prices_all[0]:
+        day_idx = (res_date - start_sim).days
+        if day_idx < 0:
             return None
-        return float(np.mean(prices_all[0]))
 
-    # 5) OCCUPANCY PERCENTAGE AT EACH DAY
-    def _log_occupancy_pct(
-        self, env_idx: int, current_day_index: int, num_cats: int, num_rooms: list[int]
-    ) -> None:
-        occupancy = self._get_attr("occupancy", env_idx)
-        for cat_idx in range(num_cats):
-            occ_raw = float(occupancy[cat_idx, current_day_index])
-            percentage = occ_raw / max(1, num_rooms[cat_idx]) * 100.0
-            self._append_row(
-                env_idx, current_day_index, f"Cat{cat_idx + 1}", "occupancy_pct", percentage
-            )
+        cat_idx = category.value - 1
+        # prendo il livello BAR attuale
+        level = int(bar_levels[cat_idx, day_idx])
 
-    def _log_probe_prices(
-        self, env_idx: int, current_day_index: int, num_cats: int, actions_env: np.ndarray
-    ) -> None:
-        for k in (1, 15, 60):
-            for cat_val in range(1, num_cats + 1):
-                prob = self._probe_price_for_advance(env_idx, k, RoomCategory(cat_val), actions_env)
-                if prob is not None:
-                    self._append_row(
-                        env_idx, current_day_index, f"Cat{cat_val}", f"advance_{k}", prob
-                    )
+        # mappo sul prezzo dalla tabella BAR
+        price = BAR_TABLE[category][level]
+        return float(price)
 
     # ========== CALLBACK SB3 ==========
 
@@ -322,10 +362,10 @@ class PlotCallback(BaseCallback):
             print("min/max raw:", raw.min(), raw.max())
             print("min/max env:", env_actions.min(), env_actions.max())
             print("action_space low/high:", low[:5], high[:5])
-            """  try:
+            try:
                 actions_np = np.asarray(raw_actions, dtype=float)
             except Exception:
-                actions_np = None """
+                actions_np = None
 
         for env_idx in range(n_envs):
             today = self._get_attr("today", env_idx)
