@@ -29,8 +29,8 @@ MIN_NUM_REQUESTS_FACTOR = 0.2
 STD_FACTOR = 0.1
 
 # Interval in the random function to generate the average number of requests
-MIN_AVG_NUM_REQUESTS = 4
-MAX_AVG_NUM_REQUESTS = 15
+MIN_AVG_NUM_REQUESTS = 300
+MAX_AVG_NUM_REQUESTS = 700
 
 
 ############### HOTEL PARAMETERS ################
@@ -87,3 +87,5 @@ N_ENVS = 2
 # Observation space parameters
 WINDOW_SIZE = 30
 NUM_WINDOWS = 12
+
+BASE_INTENSITY = 0.20

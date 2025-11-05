@@ -21,6 +21,7 @@ from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
+    BASE_INTENSITY,
     HIGH_SEASON,
     LOGISTIC_ACCEPTANCE_AVG_PRICES,
     LOGISTIC_ACCEPTANCE_BETA,
@@ -559,15 +560,17 @@ class PricingEnv(gym.Env):
         end_idx = (self.end_simulation - self.start_simulation).days
         # end_idx = self.extended_simulation_days # TODO: like above or like this?
         for cat_idx, category in enumerate(RoomCategory):
+            rooms = self.hotel.get_num_rooms_per_category(category)
             for day_idx in range(today_idx + 1, end_idx):
                 # 2a) Calculate the occupancy ratio for that day and category
-                rooms = self.hotel.get_num_rooms_per_category(category)
                 occ_ratio = float(self.occupancy[cat_idx, day_idx]) / max(1, rooms)
                 # If for any reason the occupancy ratio is out of bounds, we clip it between 0 and 1
                 occ_ratio = np.clip(occ_ratio, 0.0, 1.0)
 
-                # 2b) Prob to increase the bar level
+                # 2b) Raw probabbility to increase the bar level
                 p = models[cat_idx].predict_increment_probs(occ_ratio)
+
+                # 2c) ...
 
                 # 2c) Increase the bar level with probability p --> Bernoulli trial
                 if self.np_rng.random() < p:

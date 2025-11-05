@@ -11,7 +11,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 
 import pricing_advertising.environment.__init__  # noqa: F401
 
-# import i tuoi oggetti
+# your imports
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.plots.plot_callback import PlotCallback
 from pricing_advertising.utils.constants import (
@@ -23,18 +23,18 @@ from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
 def run_test_simulation() -> float:
     # ============ FIXED HYPERPARAMETERS ============
-    timesteps = 5000
-    learning_rate = 1e-4
-    gamma = 0.99
+    timesteps: int = 5000
+    learning_rate: float = 1e-4
+    gamma: float = 0.99
 
     # ============ SIMULATION PERIOD ============
-    start_simulation = date(2025, 1, 1)
-    end_simulation = date(2025, 6, 1)
+    start_simulation: date = date(2025, 1, 1)
+    end_simulation: date = date(2025, 12, 1)
 
     # ============ HOTEL INFO ============
-    num_category1_rooms = 25
-    num_category2_rooms = 25
-    num_category3_rooms = 25
+    num_category1_rooms: int = 50
+    num_category2_rooms: int = 50
+    num_category3_rooms: int = 50
 
     # ============ SEED ============
     seed = SEEDS[0]

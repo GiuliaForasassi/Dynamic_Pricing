@@ -1,16 +1,26 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
+        {
+            "name": "Main",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pricing_advertising",
+            "args": [],
+            "justMyCode": false,
+            "env": {}
+        },
         {
             "name": "Current File",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "cwd": "${workspaceFolder}",
-            "env": { "PYTHONPATH": "${workspaceFolder}" },
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
             "console": "integratedTerminal",
             "justMyCode": false
-        }
+        },
     ]
 }

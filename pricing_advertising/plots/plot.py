@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import mlflow
+import numpy as np
 import pandas as pd
 from matplotlib.container import BarContainer
 
@@ -169,7 +170,7 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         for cat, g in d.groupby("category", sort=False):
             plt.plot(g["day"], g["value"], label=str(cat))
             # plt.plot(g["day"], g["value"].rolling(window=7, min_periods=1).mean(), label=str(cat))
-        plt.title("Action curve)")
+        plt.title("Action curve")
         plt.xlabel("Simulation day")
         plt.ylabel("Action")
         plt.legend()
@@ -187,7 +188,128 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         plt.tight_layout()
         log_fig("4B_action_curve_overall")
 
-    # ========== 5) Prices for advances ==========
+    # ========== 4C) Action coefficients per category ==========
+    d = df[df["kind"] == "action_coeff"].copy()
+    if not d.empty:
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d.dropna(subset=["day", "value"]).sort_values("day")
+
+        # estrai cat e k da "CatX_kY"
+        parsed = d["category"].str.extract(r"Cat(?P<cat>\d+)_k(?P<k>\d+)")
+        d["cat"] = pd.to_numeric(parsed["cat"], errors="coerce")
+        d["k"] = pd.to_numeric(parsed["k"], errors="coerce")
+        d = d.dropna(subset=["cat", "k"])
+
+        # forza a int "puro" (evita problemi con Int64 nullable)
+        d["cat"] = d["cat"].astype(int)
+        d["k"] = d["k"].astype(int)
+
+        for cat_val, g in d.groupby("cat", sort=True):
+            pivot = (
+                g.pivot_table(index="day", columns="k", values="value", aggfunc="mean")
+                .sort_index()  # ordina per giorno
+                .sort_index(axis=1)  # ordina i coefficienti: k=0,1,2,...
+            )
+            if pivot.empty:
+                continue
+
+            plt.figure()
+            x = pivot.index.to_numpy(dtype=int)
+
+            # una linea per ciascun coefficiente θ_k
+            for k in pivot.columns:
+                y = pivot[k].to_numpy(dtype=float)
+                plt.plot(x, y, label=f"θ{k}")
+
+            plt.title(f"Action coefficients — Cat{cat_val}")
+            plt.xlabel("Simulation day")
+            plt.ylabel("Coefficient value")
+            plt.legend(ncol=2)
+            plt.tight_layout()
+            log_fig(f"4C_action_coeff_cat{cat_val}")
+
+    # ========== 5) Price curve ==========
+    d = df[df["kind"] == "price_curve"].copy()
+    if not d.empty:
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d.dropna(subset=["day", "value"]).sort_values("day")
+
+        plt.figure()
+        for cat, g in d.groupby("category", sort=True):
+            x = g["day"].to_numpy(dtype=int)
+            y = g["value"].to_numpy(dtype=float)
+            plt.plot(x, y, label=str(cat))
+
+        plt.title("Daily price curve by category")
+        plt.xlabel("Day")
+        plt.ylabel("Price")
+        plt.legend()
+        plt.tight_layout()
+        log_fig("5_price_curve_by_category")
+
+    # ========== 6A) BAR levels for each category - only one figure ==========
+    d = df[df["kind"] == "bar_level"].copy()
+    if not d.empty:
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d.dropna(subset=["day", "value"]).sort_values("day")
+
+        plt.figure()
+        for cat, g in d.groupby("category", sort=True):
+            x = g["day"].to_numpy(dtype=int)
+            y = g["value"].to_numpy(dtype=float)
+            plt.plot(x, y, label=str(cat))
+        plt.title("BAR levels")
+        plt.xlabel("Day")
+        plt.ylabel("BAR level")
+        plt.legend()
+        plt.tight_layout()
+        log_fig("6A_bar_levels_per_category")
+
+    # ========== 6B) BAR levels — one figure per category ==========
+    d = df[df["kind"] == "bar_level"].copy()
+    if not d.empty:
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d.dropna(subset=["day", "value"]).sort_values("day")
+
+        # calculate the max level to draw the discrete tick
+        ymax = int(d["value"].max()) if not d.empty else 0
+        y_ticks = list(range(0, ymax + 1))
+
+        # for each category one plot
+        for cat, g in d.groupby("category", sort=True):
+            x = g["day"].to_numpy(dtype=int)
+            y = g["value"].to_numpy(dtype=float)
+
+            plt.figure()
+            plt.step(x, y, where="post")
+            plt.title(f"BAR levels — {cat}")
+            plt.xlabel("Day")
+            plt.ylabel("BAR level")
+            plt.yticks(y_ticks)
+            plt.ylim(-0.5, ymax + 0.5)
+            plt.tight_layout()
+            log_fig(f"6B_bar_levels_{str(cat).lower()}")
+
+    # ========== 6C) BAR levels histogram ==========
+    d_hist = d.copy()
+    if not d_hist.empty:
+        plt.figure()
+        plt.hist(
+            d_hist["value"],
+            bins=np.arange(d_hist["value"].min() - 0.5, d_hist["value"].max() + 1.5, 1),
+        )
+        plt.title("Distribution of BAR levels")
+        plt.xlabel("BAR level")
+        plt.ylabel("Count")
+        plt.tight_layout()
+        log_fig("6C_bar_levels_hist")
+
+    # ========== Prices for advances ==========
+
     """
     for k in (1, 15, 60):
         d = df[df["kind"] == f"advance_{k}"].sort_values("day")

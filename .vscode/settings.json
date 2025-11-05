@@ -12,5 +12,8 @@
       "source.fixAll": "never",
       "source.organizeImports": "explicit"
     },
-    "ruff.organizeImports": true
+    "ruff.organizeImports": true,
+    "[jsonc]": {
+      "editor.defaultFormatter": "vscode.json-language-features"
+    }
   }

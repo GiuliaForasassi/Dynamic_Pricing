@@ -101,7 +101,7 @@ class PlotCallback(BaseCallback):
                 value=int(total_today),
             )
 
-            #
+            # For each day
             per_cat_today: dict[int, int] = {}
             for r in reqs:
                 cat_val = r.category.value
@@ -297,7 +297,44 @@ class PlotCallback(BaseCallback):
             value=overall,
         )
 
-    # 5) PRICES FOR ADVANCES
+    # 5) PRICE CURVE
+    def _log_price_curve(self, env_idx: int) -> None:
+        total_days = self._get_attr("total_days", env_idx)
+        bar_levels = self._get_attr("bar_levels", env_idx)
+        num_cats = self._get_attr("num_room_categories", env_idx)
+        if total_days is None or bar_levels is None or num_cats is None:
+            return
+
+        # use the real horizon
+        for c in range(int(num_cats)):
+            category_enum = RoomCategory(c + 1)
+            for d in range(int(total_days)):
+                level = int(bar_levels[c, d])
+                price = float(BAR_TABLE[category_enum][level])
+                self._append_row(env_idx, d, f"Cat{c + 1}", "price_curve", price)
+
+    # 6) BAR LEVEL CURVE
+    def _log_bar_levels(self, env_idx: int) -> None:
+        total_days = self._get_attr("total_days", env_idx)
+        bar_levels = self._get_attr("bar_levels", env_idx)
+        num_cats = self._get_attr("num_room_categories", env_idx)
+        if total_days is None or bar_levels is None or num_cats is None:
+            return
+
+        D = int(total_days)
+        C = int(num_cats)
+        for c in range(C):
+            for d in range(D):
+                level = int(bar_levels[c, d])
+                self._append_row(
+                    env_idx=env_idx,
+                    day_idx=d,
+                    category=f"Cat{c + 1}",
+                    kind="bar_level",
+                    value=float(level),
+                )
+
+    # PRICES FOR ADVANCES
     def _log_probe_prices(
         self, env_idx: int, current_day_index: int, num_cats: int, actions_env: np.ndarray
     ) -> None:
@@ -340,6 +377,39 @@ class PlotCallback(BaseCallback):
         price = BAR_TABLE[category][level]
         return float(price)
 
+    # BERS. COEFFICIENTS
+    def _log_action_coeffs(
+        self, env_idx: int, current_day_index: int, actions_env: np.ndarray
+    ) -> None:
+        num_cats = int(self._get_attr("num_room_categories", env_idx))
+        try:
+            a = np.asarray(actions_env, dtype=float).reshape(num_cats, NUM_COEFFICIENTS)
+        except Exception:
+            # For security: if for some reason actions_env doesn't have the expected form (ex: is a 1D vector)
+            # it is duplicated for all 3 categories
+            vec = np.asarray(actions_env, dtype=float).ravel()
+            a = np.tile(vec, (num_cats, 1))[:, :NUM_COEFFICIENTS]
+
+        # Clipping at bounds of action space: to guarantee that the coefficients remain between 0 and 1
+        low = np.asarray(self.training_env.get_attr("action_space")[0].low, dtype=float).reshape(
+            num_cats, NUM_COEFFICIENTS
+        )
+        high = np.asarray(self.training_env.get_attr("action_space")[0].high, dtype=float).reshape(
+            num_cats, NUM_COEFFICIENTS
+        )
+        a = np.clip(a, low, high)
+
+        # Log
+        for c in range(num_cats):
+            for k in range(NUM_COEFFICIENTS):
+                self._append_row(
+                    env_idx,
+                    current_day_index,
+                    f"Cat{c + 1}_k{k}",
+                    "action_coeff",
+                    float(a[c, k]),
+                )
+
     # ========== CALLBACK SB3 ==========
 
     # ========== ON STEP ==========
@@ -363,7 +433,7 @@ class PlotCallback(BaseCallback):
             print("min/max env:", env_actions.min(), env_actions.max())
             print("action_space low/high:", low[:5], high[:5])
             try:
-                actions_np = np.asarray(raw_actions, dtype=float)
+                actions_np = np.asarray(env_actions, dtype=float)
             except Exception:
                 actions_np = None
 
@@ -377,15 +447,14 @@ class PlotCallback(BaseCallback):
             # 2) Extract the actions of the current env (if available)
             actions_env = None
             if actions_np is not None:
-                if actions_np.ndim >= 1 and actions_np.shape[0] == n_envs:
-                    actions_env = actions_np[env_idx]
-                else:
-                    actions_env = actions_np
+                # shape: (n_envs, num_cats, NUM_COEFFICIENTS)
+                actions_env = actions_np[env_idx] if actions_np.shape[0] == n_envs else actions_np
 
             # 3) Log metrics
             if actions_env is not None:
                 self._log_action_curve(env_idx, current_day_index, num_cats, actions_env)
                 self._log_probe_prices(env_idx, current_day_index, num_cats, actions_env)
+                self._log_action_coeffs(env_idx, current_day_index, actions_env)
             self._log_occupancy_pct(env_idx, current_day_index, num_cats, num_rooms)
 
         return True
@@ -406,6 +475,8 @@ class PlotCallback(BaseCallback):
         for env_idx in range(n_envs):
             self._log_occupancy_dist(env_idx)
             self._log_acceptance_counts(env_idx)
+            self._log_price_curve(env_idx)
+            self._log_bar_levels(env_idx)
 
         # 2) Create the dataframe
         if not self.rows:
