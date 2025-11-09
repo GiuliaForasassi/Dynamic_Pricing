@@ -1,7 +1,7 @@
 from datetime import date
 
+from pricing_advertising.training.ppo_training import run_simulation
 from pricing_advertising.utils.constants import SEEDS
-from training.ppo_training import run_simulation
 
 if __name__ == "__main__":
     # choose values; must be --> n_steps % n_envs == 0

@@ -2,7 +2,7 @@ import random
 from collections import Counter
 from copy import deepcopy
 from datetime import date, timedelta
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 import gymnasium as gym
 import numpy as np
@@ -21,20 +21,16 @@ from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
-    BASE_INTENSITY,
     HIGH_SEASON,
     LOGISTIC_ACCEPTANCE_AVG_PRICES,
     LOGISTIC_ACCEPTANCE_BETA,
     LOGISTIC_ACCEPTANCE_VARIANCES,
     MAX_AVG_NUM_REQUESTS,
-    MAX_PRICE,
     MIN_AVG_NUM_REQUESTS,
-    MIN_PRICE,
     NUM_COEFFICIENTS,
     NUM_WINDOWS,
     WINDOW_SIZE,
 )
-from pricing_advertising.utils.utils_functions import extract_advance
 
 
 class PricingEnv(gym.Env):
@@ -126,12 +122,20 @@ class PricingEnv(gym.Env):
             MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS
         )
 
+        self.seasonality_array = np.array(
+            [
+                self.get_seasonality(start_simulation + timedelta(day_idx))
+                for day_idx in range((self.extended_end_simulation - self.start_simulation).days)
+            ]
+        )
+
         # Instantiate the request generator and acceptance model
         self.request_generator = request_generator or RequestGenerator(
             self.avg_num_requests,
             start_simulation,
             end_simulation,
             extended_end_simulation=self.extended_end_simulation,
+            seasonality_array=self.seasonality_array,
             distribution=None,
             seed=seed,
             precompute=True,  # always precompute requests at the beginning
@@ -201,7 +205,7 @@ class PricingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        seasonality = int(self.get_seasonality(self.today))
+        seasonality = self.seasonality_array
 
         # Clip for security
         occupancy_windows = np.clip(occupancy_windows, 0.0, 1.0)
@@ -501,17 +505,26 @@ class PricingEnv(gym.Env):
         """
         masks = []
         for request in requests:
-            if not self.check_hotel_availability(request):
-                alternative_room = self._check_alternatives(request)
-                if alternative_room is None:
-                    masks.append(0)
-                else:
-                    masks.append(1)
-            else:
+            if self.check_hotel_availability(request):
                 masks.append(1)
+                continue
+
+            alternative_room = self._check_alternative_room(request)
+            if alternative_room is not None:
+                masks.append(1)
+                continue
+
+            alternative_period = self._check_alternative_period(request)
+            if alternative_period is not None:
+                request.proposed_t_reservation = alternative_period.proposed_t_reservation
+                request.proposed_days_stay = alternative_period.proposed_days_stay
+                masks.append(1)
+                continue
+
+            masks.append(0)
         return np.array(masks)
 
-    def _check_alternatives(self, request: Request) -> RoomCategory | None:
+    def _check_alternative_room(self, request: Request) -> RoomCategory | None:
         """
         Checks for alternative room categories if the requested category is
         unavailable.
@@ -532,6 +545,45 @@ class PricingEnv(gym.Env):
             if self.check_hotel_availability(modified_request):
                 return alt_category
         # If no alternatives are available, return None
+        return None
+
+    def _check_alternative_period(self, request: Request) -> Request | None:
+        """
+        Checks for alternative period if the request cannot be satisfied.
+
+        Args:
+            request (Request): The request object containing the desired reservation
+            category and days.
+
+        Returns:
+            Request | None: A request with an alternative period if possible, or
+            None otherwise.
+        """
+        alternatives = [deepcopy(request) for _ in range(4)]
+
+        # alternative 0: x+1, d-1 (start one day later)
+        alternatives[0].proposed_t_reservation = request.t_reservation - timedelta(days=1)
+        alternatives[0].proposed_days_stay = request.days_stay - 1
+
+        # alternative 1: x, d-1 (end one day earlier)
+        alternatives[1].proposed_days_stay = request.days_stay - 1
+
+        # alternative 2: x-1, d (shift one day earlier)
+        alternatives[2].proposed_t_reservation = request.t_reservation - timedelta(1)
+
+        # alternative 3: x+1, d (shift one day later)
+        alternatives[3].proposed_t_reservation = request.t_reservation + timedelta(1)
+
+        valid_alternatives = [
+            alternative
+            for alternative in alternatives
+            if self.check_hotel_availability(alternative)
+        ]
+
+        if valid_alternatives:
+            proposal = random.choice(alternatives)
+            return proposal
+
         return None
 
     def _apply_mask(self, mask: np.ndarray, requests: np.ndarray) -> np.ndarray:

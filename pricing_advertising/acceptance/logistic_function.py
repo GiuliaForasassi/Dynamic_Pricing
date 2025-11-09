@@ -38,6 +38,9 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
             variance=variance,
             avg_price=avg_price,
         )
+        if request.proposed_t_reservation is not None or request.proposed_days_stay is not None:
+            acceptance_probability *= 0.8
+
         random_number = random.random()
         accepted = random_number <= acceptance_probability
 

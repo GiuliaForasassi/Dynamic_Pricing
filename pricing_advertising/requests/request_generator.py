@@ -11,6 +11,8 @@ from scipy.stats import norm, rv_continuous
 from pricing_advertising.exceptions.exceptions import InvalidReservationWindowError
 from pricing_advertising.requests.request import Request
 from pricing_advertising.utils.constants import (
+    HIGH_SEASON,
+    HIGH_SEASON_MULTIPLIER,
     MAX_DAYS_STAY,
     MAX_GUESTS,
     MIN_GUESTS,
@@ -27,7 +29,7 @@ class RequestGenerator:
         start_simulation: date,
         end_simulation: date,
         extended_end_simulation: date,
-        seasonality_func: np.ndarray | None = None,
+        seasonality_array: np.ndarray,
         distribution: rv_continuous | None = None,
         seed: int | None = None,
         # constructuctor parameter: if True, precompute all requests at the start
@@ -56,15 +58,7 @@ class RequestGenerator:
         self.start_simulation = start_simulation
         self.end_simulation = end_simulation
         self.extended_end_simulation = extended_end_simulation
-
-        self.seasonality_func = (
-            seasonality_func.astype(float)
-            if seasonality_func is not None
-            else np.ones(365, dtype=float)
-        ).astype(float)
-
-        if self.seasonality_func.shape != (365,):
-            raise ValueError("`seasonality_func` must be a vector of length 365")
+        self.seasonality_array = seasonality_array
 
         # If no distribution is provided, we use a normal distribution (loc: mean, scale: std)
         self.base_dist = (
@@ -118,9 +112,10 @@ class RequestGenerator:
 
     # ============ SAMPLING THE NUMBER OF REQUESTS ============
     def _sample_num_requests(self, today: date) -> int:
-        day_of_year = today.timetuple().tm_yday - 1  # 0-indexed: 0-364
         # Get the seasonality factor for the current day
-        seasonality_factor = float(self.seasonality_func[day_of_year])
+        seasonality_factor = 1
+        if int(today.month in HIGH_SEASON):
+            seasonality_factor = HIGH_SEASON_MULTIPLIER
         # Calculate the number of requests based on the average number of requests and the seasonality factor
         adjusted_mean = max(0.0, self.avg_num_requests * seasonality_factor)
         # Create a normal distribution with the adjusted mean and standard deviation
@@ -144,7 +139,10 @@ class RequestGenerator:
         # Possible advances are between 1 and maximum_advance - 1
         possible_advances = np.arange(1, remaining_from_today, dtype=int)
         # Weights for the advances are linearly decreasing
-        weights = np.arange(len(possible_advances), 0, -1, dtype=float)
+        time_weights = np.arange(len(possible_advances), 0, -1, dtype=float)
+        # Seasonality weights
+        seasonality_weights = self.seasonality_array[(today - self.start_simulation).days + 1 :] + 1
+        weights = time_weights * seasonality_weights
         # Normalize the weights to get probabilities
         advances_probs = weights / weights.sum()
         # Sample a random advance from the possible advances with the given probabilities
@@ -185,7 +183,7 @@ if __name__ == "__main__":
         start_simulation=START_SIM,
         end_simulation=END_SIM,
         extended_end_simulation=EXT_END_SIM,
-        seasonality_func=seasonality,
+        seasonality_array=seasonality,
         seed=SEED,
         precompute=True,
     )

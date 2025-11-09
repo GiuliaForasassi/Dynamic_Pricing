@@ -32,7 +32,6 @@ STD_FACTOR = 0.1
 MIN_AVG_NUM_REQUESTS = 300
 MAX_AVG_NUM_REQUESTS = 700
 
-
 ############### HOTEL PARAMETERS ################
 
 # Number of room categories
@@ -41,15 +40,8 @@ NUM_CATEGORIES = 3
 ############### SEASONALITY #####################
 
 # High season months
-HIGH_SEASON = set([1, 2, 6, 7, 8, 12])
-
-################# PRICE PARAMETERS ################
-
-# Interval in the random function to generate the price
-MIN_PRICE = 50
-MAX_PRICE = 200
-
-VARIABILITY_MIN_MAX_PRICE = 0.2
+HIGH_SEASON = set([1, 2, 7, 8, 9, 12])
+HIGH_SEASON_MULTIPLIER = 2
 
 ################# BERSTEIN COEFFICIENTS ################
 

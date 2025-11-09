@@ -17,6 +17,8 @@ class Request:
         self.t_reservation = t_reservation
         self.days_stay = days_stay
         self.num_guests = num_guests
+        self.proposed_t_reservation: date | None = None
+        self.proposed_days_stay: int | None = None
 
     def __str__(self) -> str:
         return f"Request: {self.t_request} | Reservation: {self.t_reservation} | Stay: {self.days_stay} days | Guests: {self.num_guests}"
