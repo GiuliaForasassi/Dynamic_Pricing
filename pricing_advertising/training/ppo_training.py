@@ -23,13 +23,18 @@ from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
 def run_simulation(
     # ======= TRAINING SCHEDULE =======
+    # total training = total_cycles * steps_per_cycle
+    # total_cycles --> only for “scheduling” to break the training: for doing log/metrics
     total_cycles: int,
+    # steps_per_cycle: multiple of n_steps * n_envs
     steps_per_cycle: int,
     # ======= PPO/ENV =======
     n_envs: int,
+    # n_steps: timesteps per environment in the rollout
     n_steps: int,
     learning_rate: float,
     gamma: float,
+    # epochs: number of optimisation passes on the same rollout
     n_epochs: int,
     policy: str = "MultiInputPolicy",
     # ======= EVAL =======
@@ -106,6 +111,7 @@ def run_simulation(
         )
 
         # ============ Model ============
+        # PPO works into rollout of size = n_steps * n_envs
         model = PPO(
             policy,
             vec_env,

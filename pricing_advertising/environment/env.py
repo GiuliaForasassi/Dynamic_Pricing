@@ -124,7 +124,7 @@ class PricingEnv(gym.Env):
 
         self.seasonality_array = np.array(
             [
-                self.get_seasonality(start_simulation + timedelta(day_idx))
+                self.get_seasonality(start_simulation + timedelta(days=day_idx))
                 for day_idx in range((self.extended_end_simulation - self.start_simulation).days)
             ]
         )
@@ -271,7 +271,7 @@ class PricingEnv(gym.Env):
         requests = self.request_generator.fetch_requests_for_date(self.today)
 
         # Check if the requests can be accommodated
-        valid_mask = self._process_requests(requests)
+        valid_mask = self._process_requests(requests, self.today)
         valid_requests = self._apply_mask(valid_mask, requests)
 
         # Update the demand
@@ -493,7 +493,7 @@ class PricingEnv(gym.Env):
                 )
             self.demand[category_idx, t_reservation_idx] += 1
 
-    def _process_requests(self, requests: np.ndarray) -> np.ndarray:
+    def _process_requests(self, requests: np.ndarray, today: date) -> np.ndarray:
         """
         Processes a batch of requests and returns a mask indicating the availability of rooms.
 
@@ -514,7 +514,7 @@ class PricingEnv(gym.Env):
                 masks.append(1)
                 continue
 
-            alternative_period = self._check_alternative_period(request)
+            alternative_period = self._check_alternative_period(request, today)
             if alternative_period is not None:
                 request.proposed_t_reservation = alternative_period.proposed_t_reservation
                 request.proposed_days_stay = alternative_period.proposed_days_stay
@@ -547,7 +547,7 @@ class PricingEnv(gym.Env):
         # If no alternatives are available, return None
         return None
 
-    def _check_alternative_period(self, request: Request) -> Request | None:
+    def _check_alternative_period(self, request: Request, today: date) -> Request | None:
         """
         Checks for alternative period if the request cannot be satisfied.
 
@@ -559,20 +559,28 @@ class PricingEnv(gym.Env):
             Request | None: A request with an alternative period if possible, or
             None otherwise.
         """
-        alternatives = [deepcopy(request) for _ in range(4)]
+        alternatives = []
 
         # alternative 0: x+1, d-1 (start one day later)
-        alternatives[0].proposed_t_reservation = request.t_reservation - timedelta(days=1)
-        alternatives[0].proposed_days_stay = request.days_stay - 1
+        if request.days_stay > 1:
+            alternatives.append(deepcopy(request))
+            alternatives[-1].proposed_t_reservation = request.t_reservation - timedelta(days=1)
+            alternatives[-1].proposed_days_stay = request.days_stay - 1
 
         # alternative 1: x, d-1 (end one day earlier)
-        alternatives[1].proposed_days_stay = request.days_stay - 1
+        if request.days_stay > 1:
+            alternatives.append(deepcopy(request))
+            alternatives[-1].proposed_days_stay = request.days_stay - 1
 
         # alternative 2: x-1, d (shift one day earlier)
-        alternatives[2].proposed_t_reservation = request.t_reservation - timedelta(1)
+        if request.t_reservation > today + timedelta(days=1):
+            alternatives.append(deepcopy(request))
+            alternatives[-1].proposed_t_reservation = request.t_reservation - timedelta(days=1)
 
         # alternative 3: x+1, d (shift one day later)
-        alternatives[3].proposed_t_reservation = request.t_reservation + timedelta(1)
+        if request.t_reservation + timedelta(days=request.days_stay) < self.extended_end_simulation:
+            alternatives.append(deepcopy(request))
+            alternatives[-1].proposed_t_reservation = request.t_reservation + timedelta(days=1)
 
         valid_alternatives = [
             alternative

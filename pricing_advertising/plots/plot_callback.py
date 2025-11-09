@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any, cast
 
 import mlflow
@@ -13,7 +13,7 @@ from pricing_advertising.plots.plot import plot_and_log_figures
 from pricing_advertising.pricing_model.bar_table import BAR_TABLE
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
-from pricing_advertising.utils.constants import NUM_COEFFICIENTS
+from pricing_advertising.utils.constants import HIGH_SEASON, NUM_COEFFICIENTS
 
 
 class PlotCallback(BaseCallback):
@@ -49,6 +49,20 @@ class PlotCallback(BaseCallback):
             }
         )
 
+    def _append_row_with_season(
+        self, env_idx: int, day_idx: int, category: str, kind: str, value: float, season: str
+    ) -> None:
+        self.rows.append(
+            {
+                "day": int(day_idx),
+                "category": category,
+                "kind": kind,
+                "value": float(value),
+                "env": int(env_idx),
+                "season": str(season),
+            }
+        )
+
     # Returns [rooms_cat1, rooms_cat2, rooms_cat3] for env idx, with caching
     def _get_num_rooms_by_cat(self, idx: int) -> list[int]:
         if idx in self._num_rooms_cache:
@@ -62,6 +76,13 @@ class PlotCallback(BaseCallback):
 
         self._num_rooms_cache[idx] = out
         return out
+
+    def _season_from_date(self, dt: date) -> str:
+        m = dt.month
+        if m in HIGH_SEASON:
+            return "High"
+        else:
+            return "Low"
 
     # ========== UTILS FUNCTIONS ==========
 
@@ -101,6 +122,16 @@ class PlotCallback(BaseCallback):
                 value=int(total_today),
             )
 
+            season = self._season_from_date(current)
+            self._append_row_with_season(
+                env_idx=env_idx,
+                day_idx=day_idx,
+                category="all",
+                kind="requests_season_total",
+                value=int(total_today),
+                season=season,
+            )
+
             # For each day
             per_cat_today: dict[int, int] = {}
             for r in reqs:
@@ -115,6 +146,15 @@ class PlotCallback(BaseCallback):
                     kind="requests_daily_cat",
                     value=float(cnt),
                 )
+
+            self._append_row_with_season(
+                env_idx=env_idx,
+                day_idx=day_idx,
+                category=str(cval),
+                kind="requests_season_cat",
+                value=float(cnt),
+                season=season,
+            )
 
             for r in reqs:
                 totals_by_cat[r.category] += 1

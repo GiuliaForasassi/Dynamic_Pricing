@@ -62,6 +62,40 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         plt.tight_layout()
         log_fig("1C_daily_requests_by_category")
 
+    # ========== 1D) Requests by season (total) ==========
+    d = df[(df["kind"] == "requests_season_total") & df["season"].notna()].copy()
+    if not d.empty:
+        # ordina stagioni in modo fisso
+        season_order = pd.CategoricalDtype(categories=["High", "Low"], ordered=True)
+        d["season"] = d["season"].astype(season_order)
+
+        s = d.groupby("season")["value"].sum().sort_index()
+        ax = s.plot(kind="bar")
+        ax.set(title="Requests by season (total)", xlabel="Season", ylabel="Number of requests")
+        for c in ax.containers:  # type: ignore
+            ax.bar_label(c, fmt="%d", padding=2)
+        plt.tight_layout()
+        log_fig("1D_requests_by_season_total")
+
+    # ========== 1E) Requests by season × category ==========
+    d = df[(df["kind"] == "requests_season_cat") & df["season"].notna()].copy()
+    if not d.empty:
+        season_order = pd.CategoricalDtype(categories=["High", "Low"], ordered=True)
+        d["season"] = d["season"].astype(season_order)
+        d["category"] = d["category"].astype(str).str.strip()
+
+        pivot = d.pivot_table(
+            index="season", columns="category", values="value", aggfunc="sum"
+        ).sort_index()  # rispetta l'ordine categoria come str
+        plt.figure()
+        pivot.plot(kind="bar")
+        plt.title("Requests by season and category")
+        plt.xlabel("Season")
+        plt.ylabel("Number of requests")
+        plt.legend(title="Category")
+        plt.tight_layout()
+        log_fig("1E_requests_by_season_and_category")
+
     # ========== 2A) Occupancy distribution ==========
     d = df[df["kind"] == "occupancy_dist"].copy()
     if not d.empty:
