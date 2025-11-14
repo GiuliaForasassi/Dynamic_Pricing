@@ -8,10 +8,9 @@ import numpy as np
 import pandas as pd
 from stable_baselines3.common.callbacks import BaseCallback
 
-from pricing_advertising.hotel.room import RoomCategory
+from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.plots.plot import plot_and_log_figures
-from pricing_advertising.pricing_model.bar_table import BAR_TABLE
-from pricing_advertising.requests.request import Request
+from pricing_advertising.pricing_model.bar_table import get_price, n_levels
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import HIGH_SEASON, NUM_COEFFICIENTS
 
@@ -147,14 +146,14 @@ class PlotCallback(BaseCallback):
                     value=float(cnt),
                 )
 
-            self._append_row_with_season(
-                env_idx=env_idx,
-                day_idx=day_idx,
-                category=str(cval),
-                kind="requests_season_cat",
-                value=float(cnt),
-                season=season,
-            )
+                self._append_row_with_season(
+                    env_idx=env_idx,
+                    day_idx=day_idx,
+                    category=str(cval),
+                    kind="requests_season_cat",
+                    value=float(cnt),
+                    season=season,
+                )
 
             for r in reqs:
                 totals_by_cat[r.category] += 1
@@ -345,12 +344,15 @@ class PlotCallback(BaseCallback):
         if total_days is None or bar_levels is None or num_cats is None:
             return
 
+        max_level = n_levels() - 1
+
         # use the real horizon
         for c in range(int(num_cats)):
             category_enum = RoomCategory(c + 1)
             for d in range(int(total_days)):
                 level = int(bar_levels[c, d])
-                price = float(BAR_TABLE[category_enum][level])
+                level = max(0, min(level, max_level))
+                price = float(get_price(category_enum.name, level))
                 self._append_row(env_idx, d, f"Cat{c + 1}", "price_curve", price)
 
     # 6) BAR LEVEL CURVE
@@ -414,7 +416,7 @@ class PlotCallback(BaseCallback):
         level = int(bar_levels[cat_idx, day_idx])
 
         # mappo sul prezzo dalla tabella BAR
-        price = BAR_TABLE[category][level]
+        price = get_price(category.name, level)
         return float(price)
 
     # BERS. COEFFICIENTS

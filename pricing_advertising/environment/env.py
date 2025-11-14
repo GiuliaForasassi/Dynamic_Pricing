@@ -16,7 +16,7 @@ from pricing_advertising.exceptions.exceptions import (
 )
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import ROOM_ALTERNATIVES, RoomCategory
-from pricing_advertising.pricing_model.bar_table import BAR_TABLE, n_levels
+from pricing_advertising.pricing_model.bar_table import get_price, n_levels
 from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.requests.request import Request
 from pricing_advertising.requests.request_generator import RequestGenerator
@@ -34,9 +34,6 @@ from pricing_advertising.utils.constants import (
 
 
 class PricingEnv(gym.Env):
-    # Metadata is a required attribute for the environment
-    # metadata: ClassVar[dict] = {"render.modes": ["human"], "render_fps": 1}  # type: ignore
-
     def __init__(
         self,
         start_simulation: date,
@@ -74,6 +71,8 @@ class PricingEnv(gym.Env):
         # ============ STATE VARIABLES ============
         self.today = start_simulation
         self.n_levels = n_levels()
+        if self.n_levels <= 0:
+            raise RuntimeError("BAR table not initialised: n_levels()=0")
         self._max_bar_level = self.n_levels - 1
 
         self.occupancy = np.zeros(
@@ -199,13 +198,14 @@ class PricingEnv(gym.Env):
                     bar_levels_windows[category, window] = np.float32(
                         bl.mean() / self._max_bar_level
                     )
+                else:
+                    bar_levels_windows[category, window] = np.float32(0.0)
 
         today_norm = np.array(
             [min(1.0, max(0.0, current_day_index / max(1, simulation_days)))],
             dtype=np.float32,
         )
-
-        seasonality = self.seasonality_array
+        seasonality = int(self.get_seasonality(self.today))
 
         # Clip for security
         occupancy_windows = np.clip(occupancy_windows, 0.0, 1.0)
@@ -589,7 +589,7 @@ class PricingEnv(gym.Env):
         ]
 
         if valid_alternatives:
-            proposal = random.choice(alternatives)
+            proposal = random.choice(valid_alternatives)
             return proposal
 
         return None
@@ -617,8 +617,8 @@ class PricingEnv(gym.Env):
 
         # 2) Look at each request
         today_idx = (self.today - self.start_simulation).days
-        end_idx = (self.end_simulation - self.start_simulation).days
-        # end_idx = self.extended_simulation_days # TODO: like above or like this?
+        # end_idx = (self.end_simulation - self.start_simulation).days
+        end_idx = self.extended_simulation_days
         for cat_idx, category in enumerate(RoomCategory):
             rooms = self.hotel.get_num_rooms_per_category(category)
             for day_idx in range(today_idx + 1, end_idx):
@@ -629,8 +629,6 @@ class PricingEnv(gym.Env):
 
                 # 2b) Raw probabbility to increase the bar level
                 p = models[cat_idx].predict_increment_probs(occ_ratio)
-
-                # 2c) ...
 
                 # 2c) Increase the bar level with probability p --> Bernoulli trial
                 if self.np_rng.random() < p:
@@ -658,7 +656,7 @@ class PricingEnv(gym.Env):
                 # Take the bar level, that is updated before (point 1)
                 bar_level = int(self.bar_levels[cat_idx, day_idx])
                 # Get the price from the bar table
-                price = BAR_TABLE[req.category][bar_level]
+                price = get_price(req.category.name, bar_level)
                 daily_prices.append(price)
             prices_all.append(daily_prices)
         return prices_all

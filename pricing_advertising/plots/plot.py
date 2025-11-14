@@ -102,7 +102,7 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         d["value"] = pd.to_numeric(d["value"], errors="coerce")
         vals = d["value"]
         # DEBUG PART #
-        print(
+        """print(
             "N:",
             vals.size,
             " >0:",
@@ -111,7 +111,7 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
             (vals.min() if vals.size else None, vals.max() if vals.size else None),
             " mean:",
             (vals.mean() if vals.size else None),
-        )
+        )"""
         # END DEBUG PART #
         plt.figure()
         plt.hist(vals, bins=20, range=(0, 1), density=True)

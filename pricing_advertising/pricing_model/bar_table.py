@@ -1,121 +1,186 @@
-from typing import Mapping, Sequence
+from __future__ import annotations
+
+import csv
+import os
+import re
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pricing_advertising.enums.enums import RoomCategory
 
-BAR_TABLE: dict[RoomCategory, list[float]] = {
-    RoomCategory.CATEGORY1: [
-        0,
-        114,
-        119,
-        124,
-        129,
-        134,
-        139,
-        144,
-        149,
-        154,
-        159,
-        164,
-        169,
-        174,
-        179,
-        184,
-        189,
-        209,
-        214,
-        219,
-    ],
-    RoomCategory.CATEGORY2: [
-        0,
-        69,
-        74,
-        79,
-        84,
-        89,
-        94,
-        99,
-        104,
-        109,
-        114,
-        119,
-        124,
-        129,
-        134,
-        139,
-        144,
-        154,
-        159,
-        164,
-    ],
-    RoomCategory.CATEGORY3: [
-        0,
-        129,
-        134,
-        139,
-        144,
-        149,
-        154,
-        159,
-        164,
-        169,
-        174,
-        179,
-        184,
-        189,
-        194,
-        199,
-        204,
-        229,
-        234,
-        239,
-    ],
-}
-
-# --- Check of consistency ---
-_lengths = {len(v) for v in BAR_TABLE.values()}
-if len(_lengths) != 1:
-    raise ValueError(
-        f"All room types must have the same number of BAR levels, but found different lengths: {_lengths}"
-    )
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 
-# --- Helper functions to read-only access ---
+# ===============================
+#   CSV LOADER (wide format)
+# ===============================
+
+
+def _coerce_int(x: str) -> int:
+    try:
+        return int(float(x))
+    except Exception as e:
+        raise ValueError(f"Not numeric level: {x!r}") from e
+
+
+def _coerce_float(x: str) -> float:
+    try:
+        return float(x)
+    except Exception as e:
+        raise ValueError(f"Not numeric price: {x!r}") from e
+
+
+def load_bar_table_wide_csv(csv_path: str | Path) -> dict[RoomCategory, list[float]]:
+    p = Path(csv_path)
+    if not p.exists():
+        raise FileNotFoundError(f"File CSV not found: {p}")
+
+    with p.open("r", encoding="utf-8", newline="") as fh:
+        sample = fh.read(2048)
+        fh.seek(0)
+        # Automatically detects the separator (;, , or \t)
+        try:
+            dialect = csv.Sniffer().sniff(sample)
+        except Exception:
+            dialect = csv.excel
+        reader = csv.DictReader(fh, dialect=dialect)
+
+        if reader.fieldnames is None:
+            raise ValueError("CSV without header.")
+
+        headers = [h.strip() for h in reader.fieldnames]
+        header_up = {h: h.strip().upper() for h in headers}
+
+        # Level column
+        level_col = None
+        for h, up in header_up.items():
+            if up in {"LEVEL"}:
+                level_col = h
+                break
+        if level_col is None:
+            raise ValueError("A “LEVEL” column is required in the CSV.")
+
+        # Column CATEGORY1..CATEGORY3
+        cat_cols: dict[str, str] = {}
+        pat = re.compile(r"^CATEGORY\s*([1-3])$", re.IGNORECASE)
+        for h, up in header_up.items():
+            up_norm = up.replace("_", "").replace(" ", "")
+            m = pat.match(up_norm)
+            if m:
+                cname = f"CATEGORY{m.group(1)}"
+                cat_cols[cname] = h
+
+        missing = [f"CATEGORY{i}" for i in (1, 2, 3) if f"CATEGORY{i}" not in cat_cols]
+        if missing:
+            raise ValueError(f"Columns missing: {', '.join(missing)}")
+
+        rows = []
+        for r in reader:
+            rows.append({k: v.strip() if isinstance(v, str) else v for k, v in r.items()})
+
+    # Mapping level -> price
+    by_cat: dict[str, dict[int, float]] = {f"CATEGORY{i}": {} for i in (1, 2, 3)}
+    for r in rows:
+        lv = _coerce_int(r[level_col])
+        for cname, hdr in cat_cols.items():
+            by_cat[cname][lv] = _coerce_float(r[hdr])
+
+    # Sort by level and fill in any gaps
+    lists: dict[str, list[float]] = {}
+    max_level = max(max(d.keys()) for d in by_cat.values())
+    for cname, d in by_cat.items():
+        prices: list[float] = []
+        last = 0.0
+        for lv in range(max_level + 1):
+            if lv in d:
+                last = d[lv]
+            prices.append(last)
+        lists[cname] = prices
+
+    # Check that all categories are the same length.
+    lengths = {len(v) for v in lists.values()}
+    if len(lengths) != 1:
+        raise ValueError(f"All categories must have the same number of levels: {lengths}")
+
+    # Maps a roomcategory
+    result: dict[RoomCategory, list[float]] = {}
+    for i in (1, 2, 3):
+        cname = f"CATEGORY{i}"
+        result[RoomCategory[cname]] = lists[cname]
+
+    return result
+
+
+# ===============================
+#   SET BAR TABLE FROM CSV
+# ===============================
+
+BAR_TABLE: dict[RoomCategory, list[float]] = {}
+
+
+def set_bar_table_from_csv(csv_path: str | Path | None = None) -> None:
+    global BAR_TABLE
+    path = csv_path or os.getenv("BAR_TABLE_CSV")
+    if not path:
+        raise RuntimeError("Specify the CSV path or set BAR_TABLE_CSV.")
+    BAR_TABLE = load_bar_table_wide_csv(path)
+
+
+# ===============================
+#   Helper functions
+# ===============================
+
+
 def room_types() -> list[str]:
-    """Returns the list of room types available in the bar table."""
     return [room.name for room in BAR_TABLE.keys()]
 
 
 def n_levels() -> int:
-    """Returns the number of pricing levels available for each room type."""
-    return len(next(iter(BAR_TABLE.values())))
+    return len(next(iter(BAR_TABLE.values()))) if BAR_TABLE else 0
 
 
 def get_price(room_type: str, level: int) -> float:
-    """Returns the price for a given room type and pricing level.
-
-    Args:
-        room_type (str): The type of the room (e.g., "ROOM1", "ROOM2", "ROOM3").
-        level (int): The pricing level (0-indexed).
-
-    Returns:
-        float: The price for the specified room type and pricing level.
-    """
     prices = BAR_TABLE[RoomCategory[room_type]]
-    bar_level = max(0, min(level, len(prices) - 1))  # Ensure level is within valid range
+    bar_level = max(0, min(level, len(prices) - 1))
     return prices[bar_level]
 
 
 def as_mapping() -> Mapping[str, Sequence[float]]:
-    """Returns the BAR_TABLE as a mapping."""
     return {room.name: prices for room, prices in BAR_TABLE.items()}
 
 
-if __name__ == "__main__":
-    # Stampa la tabella BAR in formato leggibile
-    print("=== TABELLAAAA BAR ===")
-    header = "BAR_LEVEL".ljust(10) + "  " + "  ".join(room.center(10) for room in room_types())
-    print(header)
-    print("-" * len(header))
-    for level in range(n_levels()):
-        row_values = [f"{get_price(room, level):>10.2f}" for room in room_types()]
-        print(f"{str(level).ljust(10)}  " + "  ".join(row_values))
+def bar_table_as_str(max_levels: int | None = None) -> str:
+    if not BAR_TABLE:
+        return "<BAR_TABLE is empty. Call set_bar_table_from_csv(...) first.>"
+
+    # Ordino le categorie in base al valore dell'enum (CATEGORY1, CATEGORY2, ...)
+    room_order = sorted(BAR_TABLE.keys(), key=lambda r: r.value)
+
+    # Numero livelli
+    total_levels = len(next(iter(BAR_TABLE.values())))
+    n = min(total_levels, max_levels) if max_levels is not None else total_levels
+
+    # Imposto la larghezza delle colonne
+    level_col_width = 5
+    price_col_width = 10
+
+    # Header
+    header = "LEVEL".ljust(level_col_width)
+    for room in room_order:
+        header += f"{room.name:>{price_col_width}}"
+    lines = [header]
+
+    # Righe per ogni livello
+    for lvl in range(n):
+        row = f"{lvl:<{level_col_width}d}"
+        for room in room_order:
+            price = BAR_TABLE[room][lvl]
+            row += f"{price:>{price_col_width}.2f}"
+        lines.append(row)
+
+    return "\n".join(lines)
+
+
+def print_bar_table(max_levels: int | None = None) -> None:
+    print(bar_table_as_str(max_levels))
