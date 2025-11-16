@@ -36,17 +36,17 @@ def run_simulation(
     gamma: float,
     # epochs: number of optimisation passes on the same rollout
     n_epochs: int,
-    policy: str = "MultiInputPolicy",
+    policy: str,
     # ======= EVAL =======
-    eval_episodes: int = 5,
+    eval_episodes: int,
     # ======= SIMULAZIONE HOTEL =======
-    start_simulation: date = date(2025, 1, 1),
-    end_simulation: date = date(2025, 12, 1),
-    num_category1_rooms: int = 50,
-    num_category2_rooms: int = 50,
-    num_category3_rooms: int = 50,
+    start_simulation: date,
+    end_simulation: date,
+    num_category1_rooms: int,
+    num_category2_rooms: int,
+    num_category3_rooms: int,
     # ======= SEED =======
-    seed: int = SEEDS[0],
+    seed: int,
 ) -> float:
     # ============ MLFLOW SETUP ============
     mlflow.set_experiment("PricingEnv_Simulation")

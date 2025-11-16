@@ -7,8 +7,7 @@ from pricing_advertising.utils.constants import SEEDS
 
 if __name__ == "__main__":
     # Load bar table
-    pkg_dir = Path(__file__).resolve().parent
-    csv_path = pkg_dir / "data" / "bar_table.csv"
+    csv_path = Path("data") / "bar_table.csv"
     set_bar_table_from_csv(csv_path)
 
     # choose values; must be --> n_steps % n_envs == 0
