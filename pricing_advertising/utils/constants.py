@@ -41,7 +41,7 @@ NUM_CATEGORIES = 3
 
 # High season months
 HIGH_SEASON = set([1, 2, 7, 8, 9, 12])
-HIGH_SEASON_MULTIPLIER = 2
+HIGH_SEASON_MULTIPLIER = 1.2
 
 ################# BERSTEIN COEFFICIENTS ################
 

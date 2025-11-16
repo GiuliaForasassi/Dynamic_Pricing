@@ -24,6 +24,7 @@ class PlotCallback(BaseCallback):
         self._num_rooms_cache: dict[int, list[int]] = {}
         # Store the pairs (category, day) already logged for each env
         self._occ_seen: dict[int, set[tuple[int, int]]] = {}
+        self._initial_requests_logged = False
 
     # ========== HELPER FUNCTIONS FOR SubprocVecEnv ==========
 
@@ -36,20 +37,7 @@ class PlotCallback(BaseCallback):
         return self.training_env.env_method(method_name, *args, indices=idx, **kwargs)[0]
 
     def _append_row(
-        self, env_idx: int, day_idx: int, category: str, kind: str, value: float
-    ) -> None:
-        self.rows.append(
-            {
-                "day": int(day_idx),
-                "category": category,
-                "kind": kind,
-                "value": float(value),
-                "env": int(env_idx),
-            }
-        )
-
-    def _append_row_with_season(
-        self, env_idx: int, day_idx: int, category: str, kind: str, value: float, season: str
+        self, env_idx: int, day_idx: int, category: str, kind: str, value: float, season: str | None
     ) -> None:
         self.rows.append(
             {
@@ -113,20 +101,12 @@ class PlotCallback(BaseCallback):
             reqs = gen.requests_by_day.get(current, [])
             day_idx = (current - start_sim).days
             total_today = len(reqs)
+            season = self._season_from_date(current)
             self._append_row(
                 env_idx=env_idx,
                 day_idx=day_idx,
                 category="all",
                 kind="requests_daily_total",
-                value=int(total_today),
-            )
-
-            season = self._season_from_date(current)
-            self._append_row_with_season(
-                env_idx=env_idx,
-                day_idx=day_idx,
-                category="all",
-                kind="requests_season_total",
                 value=int(total_today),
                 season=season,
             )
@@ -143,14 +123,6 @@ class PlotCallback(BaseCallback):
                     day_idx=day_idx,
                     category=str(cval),
                     kind="requests_daily_cat",
-                    value=float(cnt),
-                )
-
-                self._append_row_with_season(
-                    env_idx=env_idx,
-                    day_idx=day_idx,
-                    category=str(cval),
-                    kind="requests_season_cat",
                     value=float(cnt),
                     season=season,
                 )
@@ -172,6 +144,7 @@ class PlotCallback(BaseCallback):
                 category=str(cat.value),
                 kind="initial_requests",
                 value=float(total),
+                season=None,
             )
 
     # 2) OCCUPANCY DISTRIBUTION
@@ -207,6 +180,7 @@ class PlotCallback(BaseCallback):
                     category=str(c + 1),
                     kind="occupancy_dist",
                     value=float(v),
+                    season=None,
                 )
 
     # OCCUPANCY PERCENTAGE AT EACH DAY
@@ -218,7 +192,12 @@ class PlotCallback(BaseCallback):
             occ_raw = float(occupancy[cat_idx, current_day_index])
             percentage = occ_raw / max(1, num_rooms[cat_idx]) * 100.0
             self._append_row(
-                env_idx, current_day_index, f"Cat{cat_idx + 1}", "occupancy_pct", percentage
+                env_idx,
+                current_day_index,
+                f"Cat{cat_idx + 1}",
+                "occupancy_pct",
+                percentage,
+                season=None,
             )
 
     # 3) ACCEPTANCE
@@ -259,6 +238,7 @@ class PlotCallback(BaseCallback):
                     category=str(c + 1),
                     kind="accepted_count",
                     value=float(accepted_c),
+                    season=None,
                 )
                 self._append_row(
                     env_idx,
@@ -266,6 +246,7 @@ class PlotCallback(BaseCallback):
                     category=str(c + 1),
                     kind="rejected_count",
                     value=float(rejected_c),
+                    season=None,
                 )
 
             # Totale "all"
@@ -277,6 +258,7 @@ class PlotCallback(BaseCallback):
                 category="all",
                 kind="accepted_count",
                 value=float(accepted_all),
+                season=None,
             )
             self._append_row(
                 env_idx,
@@ -284,6 +266,7 @@ class PlotCallback(BaseCallback):
                 category="all",
                 kind="rejected_count",
                 value=float(rejected_all),
+                season=None,
             )
             return
 
@@ -298,6 +281,7 @@ class PlotCallback(BaseCallback):
                 category="all",
                 kind="accepted_count",
                 value=float(accepted_all),
+                season=None,
             )
             self._append_row(
                 env_idx,
@@ -305,6 +289,7 @@ class PlotCallback(BaseCallback):
                 category="all",
                 kind="rejected_count",
                 value=float(rejected_all),
+                season=None,
             )
         except Exception:
             return
@@ -321,7 +306,12 @@ class PlotCallback(BaseCallback):
                 action_val = float(actions_env)
             vals.append(action_val)
             self._append_row(
-                env_idx, current_day_index, f"Cat{cat_idx + 1}", "action_curve", action_val
+                env_idx,
+                current_day_index,
+                f"Cat{cat_idx + 1}",
+                "action_curve",
+                action_val,
+                season=None,
             )
         # Generic curve: mean of all category
         try:
@@ -334,6 +324,7 @@ class PlotCallback(BaseCallback):
             category="All",
             kind="action_curve",
             value=overall,
+            season=None,
         )
 
     # 5) PRICE CURVE
@@ -353,7 +344,7 @@ class PlotCallback(BaseCallback):
                 level = int(bar_levels[c, d])
                 level = max(0, min(level, max_level))
                 price = float(get_price(category_enum.name, level))
-                self._append_row(env_idx, d, f"Cat{c + 1}", "price_curve", price)
+                self._append_row(env_idx, d, f"Cat{c + 1}", "price_curve", price, season=None)
 
     # 6) BAR LEVEL CURVE
     def _log_bar_levels(self, env_idx: int) -> None:
@@ -374,6 +365,7 @@ class PlotCallback(BaseCallback):
                     category=f"Cat{c + 1}",
                     kind="bar_level",
                     value=float(level),
+                    season=None,
                 )
 
     # PRICES FOR ADVANCES
@@ -388,7 +380,9 @@ class PlotCallback(BaseCallback):
             for cat_val in range(1, num_cats + 1):
                 p = self._probe_price_for_advance(env_idx, k, RoomCategory(cat_val))
                 if p is not None:
-                    self._append_row(env_idx, current_day_index, f"Cat{cat_val}", f"advance_{k}", p)
+                    self._append_row(
+                        env_idx, current_day_index, f"Cat{cat_val}", f"advance_{k}", p, season=None
+                    )
 
     def _probe_price_for_advance(
         self, idx: int, advance: int, category: RoomCategory
@@ -450,6 +444,7 @@ class PlotCallback(BaseCallback):
                     f"Cat{c + 1}_k{k}",
                     "action_coeff",
                     float(a[c, k]),
+                    season=None,
                 )
 
     # ========== CALLBACK SB3 ==========
@@ -505,9 +500,13 @@ class PlotCallback(BaseCallback):
     def _on_training_start(self) -> None:
         if self.n_envs is None:
             self.n_envs = getattr(self.training_env, "num_envs", 1)
+        # if you have already logged the requests in the previous cycle, don't do aganin!
+        if self._initial_requests_logged:
+            return
         n_envs = self.n_envs if self.n_envs is not None else 1
         for env_idx in range(n_envs):
             self._log_initial_requests_from_generator(env_idx)
+        self._initial_requests_logged = True
 
     # ========== ON TRAINING END ==========
     def on_training_end(self) -> None:

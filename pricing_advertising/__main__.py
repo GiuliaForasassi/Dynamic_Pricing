@@ -24,7 +24,7 @@ if __name__ == "__main__":
         policy="MultiInputPolicy",
         eval_episodes=5,
         start_simulation=date(2025, 1, 1),
-        end_simulation=date(2025, 12, 1),
+        end_simulation=date(2025, 12, 31),
         num_category1_rooms=50,
         num_category2_rooms=50,
         num_category3_rooms=50,
