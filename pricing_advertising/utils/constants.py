@@ -29,8 +29,8 @@ MIN_NUM_REQUESTS_FACTOR = 0.2
 STD_FACTOR = 0.1
 
 # Interval in the random function to generate the average number of requests
-MIN_AVG_NUM_REQUESTS = 300
-MAX_AVG_NUM_REQUESTS = 700
+MIN_AVG_NUM_REQUESTS = 30
+MAX_AVG_NUM_REQUESTS = 70
 
 ############### HOTEL PARAMETERS ################
 

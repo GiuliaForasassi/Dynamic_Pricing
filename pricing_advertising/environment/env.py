@@ -347,6 +347,7 @@ class PricingEnv(gym.Env):
         Returns:
             tuple: A tuple containing the initial observation from the observation space and an empty dictionary for additional info.
         """
+        logger.info("resetting env")
         if seed is not None:
             self.np_rng = np.random.default_rng(seed)
             self.py_rng = random.Random(seed)

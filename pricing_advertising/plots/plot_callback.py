@@ -162,17 +162,13 @@ class PlotCallback(BaseCallback):
         C, D = occ_h.shape
         num_rooms = self._get_num_rooms_by_cat(env_idx)
 
-        # controlla se i valori sono già frazioni 0–1
-        mx = float(np.nanmax(occ_h)) if occ_h.size else 0.0
-        already_fraction = mx <= 1.0 + 1e-6
-
         for c in range(C):
             denom = max(1, int(num_rooms[c]))
             for d in range(D):
                 raw = float(occ_h[c, d])
 
                 # se già normalizzato → usa così, altrimenti normalizza
-                v = np.clip(raw, 0.0, 1.0) if already_fraction else np.clip(raw / denom, 0.0, 1.0)
+                v = np.clip(raw / denom, 0.0, 1.0)
 
                 self._append_row(
                     env_idx=env_idx,

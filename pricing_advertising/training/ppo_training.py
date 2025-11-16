@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import HumanOutputFormat, Logger
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 import pricing_advertising.environment.__init__  # noqa: F401
 
@@ -97,6 +97,7 @@ def run_simulation(
             "PricingEnv-v0",
             n_envs=n_envs,
             env_kwargs=env_kwargs,
+            # vec_env_cls=DummyVecEnv,
             vec_env_cls=SubprocVecEnv,
             vec_env_kwargs={"start_method": "fork"},
         )
@@ -106,6 +107,7 @@ def run_simulation(
             "PricingEnv-v0",
             n_envs=1,
             env_kwargs=env_kwargs,
+            # vec_env_cls=DummyVecEnv,
             vec_env_cls=SubprocVecEnv,
             vec_env_kwargs={"start_method": "fork"},
         )
