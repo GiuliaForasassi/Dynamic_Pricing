@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from time import perf_counter
 from typing import Any, cast
 
 import mlflow
 import numpy as np
 import pandas as pd
+from loguru import logger
 from stable_baselines3.common.callbacks import BaseCallback
 
 from pricing_advertising.enums.enums import RoomCategory
@@ -364,6 +366,17 @@ class PlotCallback(BaseCallback):
                     season=None,
                 )
 
+    # 7) REWARD
+    def _log_reward_daily(self, env_idx: int, current_day_index: int, reward_val: float) -> None:
+        self._append_row(
+            env_idx=env_idx,
+            day_idx=int(current_day_index),
+            category="all",
+            kind="reward_daily",
+            value=float(reward_val),
+            season=None,
+        )
+
     # PRICES FOR ADVANCES
     def _log_probe_prices(
         self, env_idx: int, current_day_index: int, num_cats: int, actions_env: np.ndarray
@@ -447,28 +460,32 @@ class PlotCallback(BaseCallback):
 
     # ========== ON STEP ==========
     def _on_step(self) -> bool:
+        start = perf_counter()
         n_envs = self.training_env.num_envs
         # 1) Normnalize actions
         raw_actions = self.locals.get("actions")
         actions_np = None
         if raw_actions is not None:
             raw = np.asarray(raw_actions, dtype=float)
-            # prendi gli spazi azione dei sotto-env (lista lunga n_envs)
+            # Take actions spaces
             action_spaces = self.training_env.get_attr("action_space")
-            # usa il primo env (indice 0)
+            # Index 0 = take the first env
             low = np.asarray(action_spaces[0].low, dtype=float)
             high = np.asarray(action_spaces[0].high, dtype=float)
 
             # riscalatura: [-1,1]  ->  [low, high]
             env_actions = low + (raw + 1.0) * 0.5 * (high - low)
 
-            print("min/max raw:", raw.min(), raw.max())
-            print("min/max env:", env_actions.min(), env_actions.max())
-            print("action_space low/high:", low[:5], high[:5])
             try:
                 actions_np = np.asarray(env_actions, dtype=float)
             except Exception:
                 actions_np = None
+
+            # Take the rewards of the envs
+            raw_rewards = self.locals.get("rewards")
+            rewards_np = None
+            if raw_rewards is not None:
+                rewards_np = np.asarray(raw_rewards, dtype=float).ravel()
 
         for env_idx in range(n_envs):
             today = self._get_attr("today", env_idx)
@@ -477,6 +494,12 @@ class PlotCallback(BaseCallback):
 
             num_cats = self._get_attr("num_room_categories", env_idx)
             num_rooms = self._get_num_rooms_by_cat(env_idx)
+
+            # Log rewards
+            if rewards_np is not None and rewards_np.size > env_idx:
+                r_env = float(rewards_np[env_idx])
+                self._log_reward_daily(env_idx, current_day_index, r_env)
+
             # 2) Extract the actions of the current env (if available)
             actions_env = None
             if actions_np is not None:
@@ -490,6 +513,8 @@ class PlotCallback(BaseCallback):
                 self._log_action_coeffs(env_idx, current_day_index, actions_env)
             self._log_occupancy_pct(env_idx, current_day_index, num_cats, num_rooms)
 
+        end = perf_counter()
+        logger.debug(f"on step: {end - start:.3g}")
         return True
 
     # ========== ON TRAINING START ==========

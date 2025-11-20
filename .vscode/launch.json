@@ -8,7 +8,9 @@
             "module": "pricing_advertising",
             "args": [],
             "justMyCode": false,
-            "env": {}
+            "env": {
+                "LOGURU_LEVEL": "DEBUG"
+            }
         },
         {
             "name": "Current File",

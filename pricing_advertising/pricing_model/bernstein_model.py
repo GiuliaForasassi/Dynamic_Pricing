@@ -30,6 +30,13 @@ class BernsteinProbModel:
         if len(theta) == 0:
             raise ValueError("Theta values should not be empty")
         self.theta = theta.astype(float)  # Ensure theta is of type float
+        self.m = len(self.theta) - 1
+        self.comb_dict = {}
+        for k in range(self.m + 1):
+            self.comb_dict[(self.m, k)] = float(comb(self.m, k))
+        self.comb_array = np.array(list(self.comb_dict.values()))
+        self.k_array = np.arange(self.m + 1)
+        self.m_minus_k_array = np.array([self.m - k for k in range(self.m + 1)])
 
     @property
     def beta(self) -> np.ndarray:
@@ -56,8 +63,17 @@ class BernsteinProbModel:
         Returns:
             np.ndarray | float: The value(s) of the k-th Bernstein basis polynomial at x.
         """
-        m = len(self.theta) - 1
-        return float(comb(m, k)) * (x**k) * ((1 - x) ** (m - k))
+        return self.comb_dict[(self.m, k)] * (x**k) * ((1 - x) ** (self.m - k))
+
+    def _bernstein_basis_vectorized(self, x: np.ndarray) -> np.ndarray:
+        _x = x.reshape(-1, 1)
+        return self.comb_array * (_x**self.k_array) * ((1 - _x) ** self.m_minus_k_array)
+
+    def _bernstein_polynomial_vectorized(self, x: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x, dtype=float)
+        bb = self._bernstein_basis_vectorized(x_arr)
+        y = bb.dot(self.beta)
+        return y
 
     def _bernstein_polynomial(self, x: np.ndarray) -> np.ndarray:
         """
@@ -94,6 +110,7 @@ class BernsteinProbModel:
         Returns:
             np.ndarray: An array of predicted incremental probabilities corresponding to the input occupancy values.
         """
-        z = self._bernstein_polynomial(occupancy)
+        # z = self._bernstein_polynomial(occupancy)
+        z = self._bernstein_polynomial_vectorized(occupancy)
         p = 1 / (1 + np.exp(-z))
         return p

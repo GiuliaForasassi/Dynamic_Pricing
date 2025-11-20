@@ -22,6 +22,7 @@ requires-python = ">=3.12"
     "rich>=13.9.4",
     "mlflow>=2.21.2",
     "optuna>=4.2.1",
+    "snakeviz>=2.2.2",
 ]
 
 # dependencies needed to lint and run tests
@@ -35,5 +36,10 @@ dev = [
     "pytest-mock>=3.14.0",
     "pytest-asyncio>=0.25.3",
     "ruff>=0.9.6",
+]
+
+[tool.setuptools]
+py-modules = [
+    "pricing_advertising"
 ]
 

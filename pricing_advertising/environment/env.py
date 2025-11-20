@@ -2,6 +2,7 @@ import random
 from collections import Counter
 from copy import deepcopy
 from datetime import date, timedelta
+from time import perf_counter
 from typing import Any, cast
 
 import gymnasium as gym
@@ -266,29 +267,44 @@ class PricingEnv(gym.Env):
             - done (bool): Whether the episode has ended.
             - info (dict): Additional information about the environment.
         """
+        start = perf_counter()
+        times = {}
+        times["start"] = perf_counter()
 
         # Generate requests for the current day
         requests = self.request_generator.fetch_requests_for_date(self.today)
+
+        times["t0"] = perf_counter()
 
         # Check if the requests can be accommodated
         valid_mask = self._process_requests(requests, self.today)
         valid_requests = self._apply_mask(valid_mask, requests)
 
+        times["t1"] = perf_counter()
+
         # Update the demand
         self._update_demand(requests)
 
+        times["t1.5"] = perf_counter()
+
         # Generate prices for each day of valid requests
         daily_prices = self._generate_prices(valid_requests, action)
+
+        times["t2"] = perf_counter()
 
         # Accept or reject the requests
         (accepted_mask, tot_prices) = self._evaluate_prices(daily_prices, valid_requests)
         accepted_requests = self._apply_mask(accepted_mask, valid_requests)
         accepted_prices = self._apply_mask(accepted_mask, tot_prices)
 
+        times["t3"] = perf_counter()
+
         # Update the hotel occupancy
         occupancy_mask = self._update_occupancy(accepted_requests)
         final_requests = self._apply_mask(occupancy_mask, accepted_requests)
         final_prices = self._apply_mask(occupancy_mask, accepted_prices)
+
+        times["t4"] = perf_counter()
 
         # =========================To calculate accepted requests======================
 
@@ -309,13 +325,7 @@ class PricingEnv(gym.Env):
                 self.accepted_total += accepted_c
                 self.rejected_total += rejected_c
 
-        # (facoltativo) debug print ogni 30 giorni
-        if (current_day_index % 30) == 0:
-            print(
-                f"[ACCEPT-COUNT] day={current_day_index} acc_today={sum(acc_per_cat.values())} "
-                f"rej_today={sum(tot_per_cat.values()) - sum(acc_per_cat.values())} "
-                f"acc_total={self.accepted_total} rej_total={self.rejected_total}"
-            )
+        times["t5"] = perf_counter()
         # =============================================================================
 
         # Calculate the revenue of accepted requests
@@ -326,6 +336,18 @@ class PricingEnv(gym.Env):
         terminated = self.today >= self.end_simulation
         observation = self.get_observation()
         info: dict = {}  # Placeholder for additional info
+
+        times["t6"] = perf_counter()
+
+        end = perf_counter()
+        breakdown = []
+        times_items = list(times.items())
+        for t in range(1, len(times_items)):
+            name = times_items[t][0]
+            item_time = times_items[t][1] - times_items[t - 1][1]
+            breakdown.append(f"{name}: {item_time:.3g}")
+        breakdown_str = ", ".join(breakdown)
+        logger.debug(f"Step total time {(end - start):.3g} ({breakdown_str})")
 
         return observation, reward, terminated, False, info
 
@@ -609,26 +631,62 @@ class PricingEnv(gym.Env):
         return requests[mask.astype(bool)]
 
     # ========== UPDATE BAR LEVELS ==========
-    def _update_bar_for_requests(self, actions: np.ndarray) -> None:
+    def _update_bar_for_requests_vectorized(self, actions: np.ndarray) -> None:
         # 1) Create the Bernstein polynomial models for each room category
         models: list[BernsteinProbModel] = []
         for cat_idx in range(self.num_room_categories):
-            theta = np.array(actions[cat_idx], dtype=float)
+            theta = actions[cat_idx]
             models.append(BernsteinProbModel(theta))
 
         # 2) Look at each request
         today_idx = (self.today - self.start_simulation).days
+        tomorrow_idx = today_idx + 1
+        rooms_array = np.array(
+            [self.hotel.get_num_rooms_per_category(category) for category in RoomCategory]
+        ).reshape(-1, 1)
+
+        occupancy = self.occupancy[:, tomorrow_idx:]
+
+        # 2a) Calculate the occupancy ratio for that day and category
+        occ_ratio = occupancy / rooms_array
+
+        p = np.stack(
+            [
+                models[cat_idx].predict_increment_probs(occ_ratio[cat_idx])
+                for cat_idx in range(len(RoomCategory))
+            ]
+        )
+
+        # 2c) Increase the bar level with probability p --> Bernoulli trial
+        r = self.np_rng.random(occupancy.shape)
+
+        update_mask = r < p
+
+        self.bar_levels[:, tomorrow_idx:][update_mask] = (
+            self.bar_levels[:, tomorrow_idx:][update_mask] + 1
+        ).clip(max=self._max_bar_level)
+
+    def _update_bar_for_requests(self, actions: np.ndarray) -> None:
+        occupancy = self.occupancy
+
+        # 1) Create the Bernstein polynomial models for each room category
+        models: list[BernsteinProbModel] = []
+        for cat_idx in range(self.num_room_categories):
+            theta = actions[cat_idx]
+            models.append(BernsteinProbModel(theta))
+
+        # 2) Look at each request
+        today_idx = (self.today - self.start_simulation).days
+        tomorrow_idx = today_idx + 1
         # end_idx = (self.end_simulation - self.start_simulation).days
         end_idx = self.extended_simulation_days
         for cat_idx, category in enumerate(RoomCategory):
             rooms = self.hotel.get_num_rooms_per_category(category)
-            for day_idx in range(today_idx + 1, end_idx):
+            for day_idx in range(tomorrow_idx, end_idx):
                 # 2a) Calculate the occupancy ratio for that day and category
-                occ_ratio = float(self.occupancy[cat_idx, day_idx]) / max(1, rooms)
-                # If for any reason the occupancy ratio is out of bounds, we clip it between 0 and 1
-                occ_ratio = np.clip(occ_ratio, 0.0, 1.0)
+                occ_ratio = occupancy[cat_idx, day_idx] / rooms
 
-                # 2b) Raw probabbility to increase the bar level
+                # 2b) Raw probability to increase the bar level
                 p = models[cat_idx].predict_increment_probs(occ_ratio)
 
                 # 2c) Increase the bar level with probability p --> Bernoulli trial
@@ -641,8 +699,12 @@ class PricingEnv(gym.Env):
     def _generate_prices(
         self, valid_requests: np.ndarray, actions: np.ndarray
     ) -> list[list[float]]:
+        t0 = perf_counter()
         # 1) Update bar levels
-        self._update_bar_for_requests(actions)
+        # self._update_bar_for_requests(actions)
+        self._update_bar_for_requests_vectorized(actions)
+
+        t1 = perf_counter()
 
         prices_all: list[list[float]] = []
 
@@ -660,6 +722,8 @@ class PricingEnv(gym.Env):
                 price = get_price(req.category.name, bar_level)
                 daily_prices.append(price)
             prices_all.append(daily_prices)
+        t2 = perf_counter()
+        logger.debug(f"t1-t0: {t1 - t0:.3g}, t2-t1: {t2 - t1:.3g}")
         return prices_all
 
     def _evaluate_prices(
