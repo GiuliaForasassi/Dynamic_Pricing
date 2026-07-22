@@ -8,7 +8,7 @@ import mlflow
 import numpy as np
 from loguru import logger
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CallbackList, EvalCallback
+from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import HumanOutputFormat, Logger
@@ -18,7 +18,7 @@ import pricing_advertising.environment.__init__  # noqa: F401
 
 # your imports
 from pricing_advertising.hotel.hotel import Hotel
-from pricing_advertising.plots.plot_callback import PlotCallback
+from pricing_advertising.plots.plot_callback import EvalOccupancyCallback, PlotCallback
 from pricing_advertising.utils.constants import SEEDS
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
@@ -132,19 +132,18 @@ def run_simulation(
         plot_callback = PlotCallback(
             log_to_mlflow=True,
             track_env_idx=0,
-            plot_on_episode_end=True,
-            log_initial_requests_once=True,
         )
 
         # ============ Callback di valutazione ============
-        eval_callback = EvalCallback(
+        eval_callback = EvalOccupancyCallback(
             eval_env,
-            eval_freq=10000,  # todo: RIVEDI: valutare in base a num di env di training
+            eval_freq=100,  # todo: RIVEDI: valutare in base a num di env di training
             n_eval_episodes=eval_episodes,
             deterministic=True,
             render=False,
             best_model_save_path="models/best_model/",
             log_path="models/eval_logs/",
+            log_to_mlflow=True,
         )
 
         # ============ List of callbacks ============
