@@ -117,7 +117,8 @@ class PricingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # =========== REQUEST GENERATOR AND ACCEPTANCE MODEL ============
+        # =========== REQUEST GENERATOR AND ACCEPTANCE MODEL ===========
+        # TODO: numero fisso di avg_num_requests
         self.avg_num_requests = avg_num_requests or random.randint(
             MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS
         )
@@ -267,44 +268,44 @@ class PricingEnv(gym.Env):
             - done (bool): Whether the episode has ended.
             - info (dict): Additional information about the environment.
         """
-        start = perf_counter()
-        times = {}
-        times["start"] = perf_counter()
+        # start = perf_counter()
+        # times = {}
+        # times["start"] = perf_counter()
 
         # Generate requests for the current day
         requests = self.request_generator.fetch_requests_for_date(self.today)
 
-        times["t0"] = perf_counter()
+        # times["t0"] = perf_counter()
 
         # Check if the requests can be accommodated
         valid_mask = self._process_requests(requests, self.today)
         valid_requests = self._apply_mask(valid_mask, requests)
 
-        times["t1"] = perf_counter()
+        # times["t1"] = perf_counter()
 
         # Update the demand
         self._update_demand(requests)
 
-        times["t1.5"] = perf_counter()
+        # times["t1.5"] = perf_counter()
 
         # Generate prices for each day of valid requests
         daily_prices = self._generate_prices(valid_requests, action)
 
-        times["t2"] = perf_counter()
+        # times["t2"] = perf_counter()
 
         # Accept or reject the requests
         (accepted_mask, tot_prices) = self._evaluate_prices(daily_prices, valid_requests)
         accepted_requests = self._apply_mask(accepted_mask, valid_requests)
         accepted_prices = self._apply_mask(accepted_mask, tot_prices)
 
-        times["t3"] = perf_counter()
+        # times["t3"] = perf_counter()
 
         # Update the hotel occupancy
         occupancy_mask = self._update_occupancy(accepted_requests)
         final_requests = self._apply_mask(occupancy_mask, accepted_requests)
         final_prices = self._apply_mask(occupancy_mask, accepted_prices)
 
-        times["t4"] = perf_counter()
+        # times["t4"] = perf_counter()
 
         # =========================To calculate accepted requests======================
 
@@ -325,11 +326,11 @@ class PricingEnv(gym.Env):
                 self.accepted_total += accepted_c
                 self.rejected_total += rejected_c
 
-        times["t5"] = perf_counter()
+        # times["t5"] = perf_counter()
         # =============================================================================
 
         # Calculate the revenue of accepted requests
-        reward = self._calculate_reward(final_prices, final_requests)  # to fix
+        reward = self._calculate_reward(final_prices)
 
         # Move to the next day
         self.today += timedelta(days=1)
@@ -337,17 +338,17 @@ class PricingEnv(gym.Env):
         observation = self.get_observation()
         info: dict = {}  # Placeholder for additional info
 
-        times["t6"] = perf_counter()
+        # times["t6"] = perf_counter()
 
-        end = perf_counter()
-        breakdown = []
-        times_items = list(times.items())
-        for t in range(1, len(times_items)):
-            name = times_items[t][0]
-            item_time = times_items[t][1] - times_items[t - 1][1]
-            breakdown.append(f"{name}: {item_time:.3g}")
-        breakdown_str = ", ".join(breakdown)
-        logger.debug(f"Step total time {(end - start):.3g} ({breakdown_str})")
+        # end = perf_counter()
+        # breakdown = []
+        # times_items = list(times.items())
+        # for t in range(1, len(times_items)):
+        # name = times_items[t][0]
+        # item_time = times_items[t][1] - times_items[t - 1][1]
+        # breakdown.append(f"{name}: {item_time:.3g}")
+        # breakdown_str = ", ".join(breakdown)
+        # logger.debug(f"Step total time {(end - start):.3g} ({breakdown_str})")
 
         return observation, reward, terminated, False, info
 
@@ -587,7 +588,7 @@ class PricingEnv(gym.Env):
         # alternative 0: x+1, d-1 (start one day later)
         if request.days_stay > 1:
             alternatives.append(deepcopy(request))
-            alternatives[-1].proposed_t_reservation = request.t_reservation - timedelta(days=1)
+            alternatives[-1].proposed_t_reservation = request.t_reservation + timedelta(days=1)
             alternatives[-1].proposed_days_stay = request.days_stay - 1
 
         # alternative 1: x, d-1 (end one day earlier)
@@ -699,12 +700,12 @@ class PricingEnv(gym.Env):
     def _generate_prices(
         self, valid_requests: np.ndarray, actions: np.ndarray
     ) -> list[list[float]]:
-        t0 = perf_counter()
+        # t0 = perf_counter()
         # 1) Update bar levels
         # self._update_bar_for_requests(actions)
         self._update_bar_for_requests_vectorized(actions)
 
-        t1 = perf_counter()
+        # t1 = perf_counter()
 
         prices_all: list[list[float]] = []
 
@@ -722,8 +723,8 @@ class PricingEnv(gym.Env):
                 price = get_price(req.category.name, bar_level)
                 daily_prices.append(price)
             prices_all.append(daily_prices)
-        t2 = perf_counter()
-        logger.debug(f"t1-t0: {t1 - t0:.3g}, t2-t1: {t2 - t1:.3g}")
+        # t2 = perf_counter()
+        # logger.debug(f"t1-t0: {t1 - t0:.3g}, t2-t1: {t2 - t1:.3g}")
         return prices_all
 
     def _evaluate_prices(
@@ -743,18 +744,17 @@ class PricingEnv(gym.Env):
             total_prices.append(total_price)
         return np.array(accepted_prices), np.array(total_prices)
 
-    def _calculate_reward(self, prices: np.ndarray, accepted_mask: np.ndarray) -> float:
+    def _calculate_reward(self, prices: np.ndarray) -> float:
         """
         Calculate the reward generated by the accepted requests.
 
         Parameters:
         prices (np.ndarray): An array of prices proposed to the customers.
-        accepted_mask (np.ndarray): A boolean array indicating which requests were accepted.
 
         Returns:
         float: The total reward generated by the accepted requests.
         """
-        return np.sum(prices[accepted_mask.astype(bool)])
+        return np.sum(prices)
 
     def _update_occupancy(self, accepted_requests: np.ndarray) -> np.ndarray:
         """

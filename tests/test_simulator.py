@@ -15,7 +15,6 @@ import pricing_advertising.environment.__init__  # noqa: F401
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.plots.plot_callback import PlotCallback
 from pricing_advertising.utils.constants import (
-    N_ENVS,
     SEEDS,
 )
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat

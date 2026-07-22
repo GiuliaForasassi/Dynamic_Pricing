@@ -1,16 +1,18 @@
 import gc
 import sys
 from datetime import date
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import mlflow
 import numpy as np
 from loguru import logger
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CallbackList, EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import HumanOutputFormat, Logger
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
 import pricing_advertising.environment.__init__  # noqa: F401
 
@@ -23,18 +25,14 @@ from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
 def run_simulation(
     # ======= TRAINING SCHEDULE =======
-    # total training = total_cycles * steps_per_cycle
-    # total_cycles --> only for “scheduling” to break the training: for doing log/metrics
-    total_cycles: int,
-    # steps_per_cycle: multiple of n_steps * n_envs
-    steps_per_cycle: int,
+    total_timesteps: int,
     # ======= PPO/ENV =======
     n_envs: int,
     # n_steps: timesteps per environment in the rollout
     n_steps: int,
     learning_rate: float,
     gamma: float,
-    # epochs: number of optimisation passes on the same rollout
+    # epochs: number of optimization passes on the same rollout
     n_epochs: int,
     policy: str,
     # ======= EVAL =======
@@ -56,8 +54,7 @@ def run_simulation(
             {
                 "model": "PPO",
                 "policy": policy,
-                "total_cycles": total_cycles,
-                "steps_per_cycle": steps_per_cycle,
+                "training_duration": total_timesteps,
                 "n_envs": n_envs,
                 "n_steps": n_steps,
                 "n_epochs": n_epochs,
@@ -93,6 +90,7 @@ def run_simulation(
             hotel=hotel,
         )
 
+        # da passare a PPO
         vec_env = make_vec_env(
             "PricingEnv-v0",
             n_envs=n_envs,
@@ -101,8 +99,10 @@ def run_simulation(
             vec_env_cls=SubprocVecEnv,
             vec_env_kwargs={"start_method": "fork"},
         )
+        # use Moniotr/VecMonitor to ensure that EvalCallback logs correctly
+        vec_env = VecMonitor(vec_env)
 
-        # another env for evaluation (n_envs=1)
+        # da passare a eval_callback
         eval_env = make_vec_env(
             "PricingEnv-v0",
             n_envs=1,
@@ -111,6 +111,8 @@ def run_simulation(
             vec_env_cls=SubprocVecEnv,
             vec_env_kwargs={"start_method": "fork"},
         )
+
+        eval_env = VecMonitor(eval_env)
 
         # ============ Model ============
         # PPO works into rollout of size = n_steps * n_envs
@@ -126,52 +128,58 @@ def run_simulation(
         )
         model.set_logger(logger)
 
-        # ============ Callback ============
-        callback = PlotCallback(log_to_mlflow=True)
+        # ============ Callback custom for plots ============
+        plot_callback = PlotCallback(
+            log_to_mlflow=True,
+            track_env_idx=0,
+            plot_on_episode_end=True,
+            log_initial_requests_once=True,
+        )
 
-        # ============ Training ============
-        total_trained: int = 0
-        last_mean_r: float = float("nan")
-        last_std_r: float = float("nan")
+        # ============ Callback di valutazione ============
+        eval_callback = EvalCallback(
+            eval_env,
+            eval_freq=10000,  # todo: RIVEDI: valutare in base a num di env di training
+            n_eval_episodes=eval_episodes,
+            deterministic=True,
+            render=False,
+            best_model_save_path="models/best_model/",
+            log_path="models/eval_logs/",
+        )
 
-        for _ in range(total_cycles):
-            # --- Train on the same model ---
-            model.learn(
-                total_timesteps=steps_per_cycle,
-                reset_num_timesteps=False,
-                callback=callback,
-                log_interval=1,
-                progress_bar=True,
-            )
-            total_trained += steps_per_cycle
+        # ============ List of callbacks ============
+        callback = CallbackList([plot_callback, eval_callback])
 
-            # --- Evaluation: here you are doing the prediction ---
-            mean_r, std_r = evaluate_policy(
-                model,
-                eval_env,
-                n_eval_episodes=eval_episodes,
-                deterministic=True,
-                return_episode_rewards=False,
-            )
-            last_mean_r, last_std_r = np.asarray(mean_r).item(), np.asarray(std_r).item()
+        # --- Train on the same model ---
+        model.learn(
+            total_timesteps=total_timesteps, callback=callback, log_interval=1, progress_bar=True
+        )
 
-            # log on MLflow (cumulated timesteps)
-            mlflow.log_metrics(
-                {
-                    "eval_mean_reward": last_mean_r,
-                    "eval_std_reward": last_std_r,
-                },
-                step=total_trained,
-            )
+        # --- Evaluation: here you are doing the prediction ---
+        # Look for the best model if exists
+        best_model_dir = Path("models/best_model")
+        best_model_path = best_model_dir / "best_model.zip"
+
+        # Ricarico il modello migliore per valutarlo, altrimenti uso l'ultimo modello
+        best_model = PPO.load(best_model_path, env=eval_env) if best_model_path.exists() else model
+
+        # Evaluation of the best model on eval_env
+        mean_reward, std_reward = evaluate_policy(
+            best_model,
+            eval_env,
+            n_eval_episodes=eval_episodes,
+            deterministic=True,
+        )
+
+        if isinstance(mean_reward, list) or isinstance(std_reward, list):
+            raise ValueError("Unexpected type list")
+
+        # Log on MLflow
+        mlflow.log_metric("final_eval_mean_reward", float(mean_reward))
+        mlflow.log_metric("final_eval_std_reward", float(std_reward))
 
         # ============ Cleanup ============
         vec_env.close()
         eval_env.close()
-        del model, vec_env, eval_env
-        gc.collect()
 
-        # ============ Log metrics ============
-        mlflow.log_metric("final_eval_mean_reward", last_mean_r)
-        mlflow.log_metric("final_eval_std_reward", last_std_r)
-
-        return last_mean_r
+        return mean_reward

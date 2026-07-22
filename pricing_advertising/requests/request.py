@@ -69,7 +69,15 @@ class Request:
         """
         if not isinstance(value, RoomCategory):
             raise ValueError("Invalid room category.")
-        self._category = value
+        # Reverse the getter: setting the category updates num_guests
+        if value == RoomCategory.CATEGORY1:
+            self.num_guests = 1
+        elif value == RoomCategory.CATEGORY2:
+            self.num_guests = 2
+        elif value == RoomCategory.CATEGORY3:
+            self.num_guests = 3
+        else:
+            raise ValueError(f"Unsupported RoomCategory: {value}.")
 
     @property
     def advance(self) -> int:

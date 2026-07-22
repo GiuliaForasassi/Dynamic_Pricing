@@ -73,11 +73,8 @@ LOGISTIC_ACCEPTANCE_VARIANCES = {
 
 ################# ENVIRONMENT PARAMETERS ####################
 
-# Number of environments for parallel processing
-N_ENVS = 2
-
 # Observation space parameters
 WINDOW_SIZE = 30
 NUM_WINDOWS = 12
 
-BASE_INTENSITY = 0.20
+# BASE_INTENSITY = 0.20

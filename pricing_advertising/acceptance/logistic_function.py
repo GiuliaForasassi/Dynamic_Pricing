@@ -12,14 +12,16 @@ from pricing_advertising.requests.request import Request
 
 class LogisticAcceptanceModel(ABCAcceptanceModel):
     def __init__(self, beta: float, avg_prices: dict, variances: dict) -> None:
+        # Beta parameter: check how sensitive the probability is to the difference between the proposed price and the reference price
         self.beta = beta
+        # dictionaries with avg price and variance per category
         self.avg_prices = avg_prices
         self.variances = variances
         # can add season_factor to handle the seasonality of the prices
 
         # --- DEBUG counters ---
-        self._dbg_seen = 0
-        self._dbg_acc = 0
+        # self._dbg_seen = 0
+        # elf._dbg_acc = 0
 
     def _accept(self, proposed_price: float, request: Request) -> bool:
         category = request.category
@@ -29,6 +31,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         variance = self.variances[category.value]
         avg_price = self.avg_prices[category.value]
 
+        # generate the reference price for the client for the requested category
         reference_price = self.generate_reference_price(category=category)
 
         acceptance_probability = self.logistic_function(
@@ -38,13 +41,16 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
             variance=variance,
             avg_price=avg_price,
         )
+        # penalty if you propose an alternative: the acceptance is reduced by 20%
         if request.proposed_t_reservation is not None or request.proposed_days_stay is not None:
             acceptance_probability *= 0.8
 
+        # transform the probability in a boolean decision
         random_number = random.random()
         accepted = random_number <= acceptance_probability
 
         # --- DEBUG SECTION ---
+        """
         self._dbg_seen += 1
         self._dbg_acc += int(accepted)
 
@@ -60,7 +66,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
                 f"[ACCEPT-DBG] cat={category.value} avg={avg_price:.1f} ref={reference_price:.1f} "
                 f"prop={proposed_price:.1f} std={std:.2f} beta={self.beta:.2f} "
                 f"p={acceptance_probability:.3f} accepted={accepted}"
-            )
+            )"""
         # --- END DEBUG SECTION ---
 
         return accepted

@@ -5,20 +5,27 @@ import pandas as pd
 from matplotlib.container import BarContainer
 
 
-def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
+def plot_and_log_figures(
+    df: pd.DataFrame,
+    log_to_mlflow: bool = True,
+    prefix: str = " ",
+) -> None:
     # Save each Matplotlib graph in memory and upload it directly to MLflow as an image
     def log_fig(name_graph: str) -> None:
+        final_name = f"{prefix}_{name_graph}" if prefix else name_graph
         if log_to_mlflow:
-            mlflow.log_figure(plt.gcf(), f"figures/{name_graph}.png")
+            mlflow.log_figure(plt.gcf(), f"figures/{final_name}.png")
         plt.close()
 
     # ========== 1A) Requests for each category ==========
     # Filter the original dataframe keeping only the rows about initial requests
-    d = df[df["kind"] == "initial_requests"]
+    d = df[df["kind"] == "initial_requests"].copy()
     if not d.empty:
-        d = d.copy()
-        d["category"] = d["category"].astype(int)
-        s = d.groupby("category")["value"].mean().sort_index()
+        d["category"] = pd.to_numeric(d["category"], errors="coerce")
+        d = d.dropna(subset=["category", "value"]).sort_values("category")
+        s = d.groupby("category", sort=True)["value"].sum()
+
+        plt.figure()
         ax = s.plot(kind="bar")
         ax.set(title="Requests for each category", xlabel="Category", ylabel="Number of requests")
         for c in ax.containers:  # type: ignore
@@ -30,34 +37,42 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
     # ========== 1B) Daily requests ==========
     d = df[df["kind"] == "requests_daily_total"].copy()
     if not d.empty:
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d.dropna(subset=["day", "value"]).sort_values("day")
+
+        daily = d.groupby("day", sort=True)["value"].sum()
         plt.figure()
-        d.groupby("day").value.mean().plot()
-        plt.title("Daily requests (total)")
+        plt.plot(daily.index.to_numpy(dtype=int), daily.to_numpy(dtype=float))
+        plt.title("Total daily requests")
         plt.xlabel("Simulation day")
         plt.ylabel("Requests")
         plt.tight_layout()
         log_fig("1B_daily_requests_total")
 
-    # ========== 1C) Daily requests per category ==========
-    # d = df[df["kind"] == "requests_daily_cat"].copy()
-    # if not d.empty:
-    #     d["day"] = pd.to_numeric(d["day"], errors="coerce")
-    #     d["value"] = pd.to_numeric(d["value"], errors="coerce")
-    #     d["category"] = d["category"].astype(str).str.strip()
-    #     d = d.dropna(subset=["day", "value"]).sort_values("day")
+    # ========== 1C) Daily requests by category ==========
+    """
+    d = df[df["kind"] == "requests_daily_cat"].copy()
+    if not d.empty:
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d["category"] = d["category"].astype(str).str.strip()
+        d = d.dropna(subset=["day", "value"]).sort_values(["category", "day"])
 
-    #     # Linee per categoria
-    #     plt.figure()
-    #     for cat, g in d.groupby("category", sort=True):
-    #         plt.plot(
-    #             g["day"].to_numpy(dtype=int), g["value"].to_numpy(dtype=float), label=f"Cat {cat}"
-    #         )
-    #     plt.title("Daily requests by category")
-    #     plt.xlabel("Simulation day")
-    #     plt.ylabel("Requests")
-    #     plt.legend()
-    #     plt.tight_layout()
-    #     log_fig("1C_daily_requests_by_category")
+        plt.figure()
+        for cat, g in d.groupby("category", sort=True):
+            plt.plot(
+                g["day"].to_numpy(dtype=int),
+                g["value"].to_numpy(dtype=float),
+                label=f"Cat {cat}",
+            )
+        plt.title("Daily requests by category")
+        plt.xlabel("Simulation day")
+        plt.ylabel("Requests")
+        plt.legend()
+        plt.tight_layout()
+        log_fig("1C_daily_requests_by_category")
+    """
 
     # ========== 1D) Requests by season (total) ==========
     d = df[(df["kind"] == "requests_daily_total") & df["season"].notna()].copy()
@@ -65,8 +80,10 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         # ordina stagioni in modo fisso
         season_order = pd.CategoricalDtype(categories=["High", "Low"], ordered=True)
         d["season"] = d["season"].astype(season_order)
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d.dropna(subset=["season", "value"])
 
-        s = d.groupby(["day", "season"]).value.mean().groupby("season").sum().sort_index()
+        s = d.groupby("season", observed=False)["value"].sum().sort_index()
         ax = s.plot(kind="bar")
         ax.set(title="Requests by season (total)", xlabel="Season", ylabel="Number of requests")
         for c in ax.containers:  # type: ignore
@@ -80,36 +97,41 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         season_order = pd.CategoricalDtype(categories=["High", "Low"], ordered=True)
         d["season"] = d["season"].astype(season_order)
         d["category"] = d["category"].astype(str).str.strip()
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d = d.dropna(subset=["season", "category", "value"])
 
-        pivot = (
-            d.groupby(["day", "season", "category"])[["value"]]
-            .mean()
-            .dropna()
-            .pivot_table(index="season", columns="category", values="value", aggfunc="sum")
-            .sort_index()
-        )  # rispetta l'ordine categoria come str
-        plt.figure()
-        pivot.plot(kind="bar")
-        plt.title("Requests by season and category")
-        plt.xlabel("Season")
-        plt.ylabel("Number of requests")
-        plt.legend(title="Category")
-        plt.tight_layout()
-        log_fig("1E_requests_by_season_and_category")
+        pivot = d.pivot_table(
+            index="season",
+            columns="category",
+            values="value",
+            aggfunc="sum",
+        ).sort_index()
+
+        if not pivot.empty:
+            ax = pivot.plot(kind="bar")
+            ax.set(
+                title="Requests by season and category",
+                xlabel="Season",
+                ylabel="Number of requests",
+            )
+            plt.legend(title="Category")
+            plt.tight_layout()
+            log_fig("1E_requests_by_season_and_category")
 
     # ========== 2A) Occupancy distribution ==========
     d = df[df["kind"] == "occupancy_dist"].copy()
     if not d.empty:
         d["value"] = pd.to_numeric(d["value"], errors="coerce")
-        vals = d["value"]
+        vals = d["value"].dropna()
 
-        plt.figure()
-        plt.hist(vals, bins=20, range=(0, 1), density=True)
-        plt.title("Occupancy distribution")
-        plt.xlabel("Occupancy")
-        plt.ylabel("Density")
-        plt.tight_layout()
-        log_fig("2A_occupancy_distribution")
+        if not vals.empty:
+            plt.figure()
+            plt.hist(vals, bins=20, range=(0, 1), density=True)
+            plt.title("Occupancy distribution")
+            plt.xlabel("Occupancy")
+            plt.ylabel("Density")
+            plt.tight_layout()
+            log_fig("2A_occupancy_distribution")
 
     # ========== 2B) Daily occupancy over time ==========
     d = df[df["kind"] == "occupancy_dist"].copy()
@@ -135,10 +157,10 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         # One curve for each category
         pivot = (
             d.assign(category=d["category"].astype(str).str.strip())
-            .pivot_table(index="day", columns="category", values="value", aggfunc="mean")
+            .pivot_table(index="day", columns="category", values="value", aggfunc="first")
             .sort_index()
         )
-        if pivot.shape[1] > 0:
+        if not pivot.empty:
             plt.figure()
             # Convert index to numpy array with explicit dtypes to avoid ExtensionArray issues
             x = pivot.index.to_numpy(dtype=int)
@@ -156,10 +178,18 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
     # ========== 2D) For each day: occupancy % ==========
     d = df[df["kind"] == "occupancy_pct"].copy()
     if not d.empty:
-        d = d.groupby(["day", "category"])["value"].mean().reset_index().sort_values("day")
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d["category"] = d["category"].astype(str).str.strip()
+        d = d.dropna(subset=["day", "value"]).sort_values(["category", "day"])
+
         plt.figure()
-        for cat, g in d.groupby("category", sort=False):
-            plt.plot(g["day"], g["value"], label=str(cat))
+        for cat, g in d.groupby("category", sort=True):
+            plt.plot(
+                g["day"].to_numpy(dtype=int),
+                g["value"].to_numpy(dtype=float),
+                label=str(cat),
+            )
         plt.title("Occupancy percentage")
         plt.xlabel("Simulation days")
         plt.ylabel("Occupancy (%)")
@@ -172,7 +202,10 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
         (df["category"] == "all") & (df["kind"].isin(["accepted_count", "rejected_count"]))
     ].copy()
     if not d_acc_all.empty:
-        agg = d_acc_all.groupby("kind")["value"].mean()
+        d_acc_all["value"] = pd.to_numeric(d_acc_all["value"], errors="coerce")
+        d_acc_all = d_acc_all.dropna(subset=["value"])
+
+        agg = d_acc_all.groupby("kind")["value"].sum()
         accepted = float(agg.get("accepted_count", 0.0))
         rejected = float(agg.get("rejected_count", 0.0))
         total = accepted + rejected
@@ -189,31 +222,43 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
             plt.tight_layout()
             log_fig("3_acceptance_counts")
 
-    # ========== 4A) For each day and category: action curve ==========
+    # ========== 4A) Action curve per category ==========
     d = df[df["kind"] == "action_curve"].copy()
     if not d.empty:
-        d = d.groupby(["day", "category"])["value"].mean().reset_index().sort_values("day")
+        d["day"] = pd.to_numeric(d["day"], errors="coerce")
+        d["value"] = pd.to_numeric(d["value"], errors="coerce")
+        d["category"] = d["category"].astype(str).str.strip()
+        d = d.dropna(subset=["day", "value"]).sort_values(["category", "day"])
 
-        plt.figure()
-        for cat, g in d.groupby("category", sort=False):
-            plt.plot(g["day"], g["value"], label=str(cat))
-        plt.title("Action curve")
-        plt.xlabel("Simulation day")
-        plt.ylabel("Action")
-        plt.legend()
-        plt.tight_layout()
-        log_fig("4A_action_curve_per_category")
+        d_cat = d[d["category"].str.lower() != "all"].copy()
+        if not d_cat.empty:
+            plt.figure()
+            for cat, g in d_cat.groupby("category", sort=True):
+                plt.plot(
+                    g["day"].to_numpy(dtype=int),
+                    g["value"].to_numpy(dtype=float),
+                    label=str(cat),
+                )
+            plt.title("Action curve by category")
+            plt.xlabel("Simulation day")
+            plt.ylabel("Action")
+            plt.legend()
+            plt.tight_layout()
+            log_fig("4A_action_curve_per_category")
 
-    # ========== 4B) Action curve overall ==========
-    d_all = d[d["category"].str.lower() == "all"].copy()
-    if not d_all.empty:
-        plt.figure()
-        plt.plot(d_all["day"], d_all["value"])
-        plt.title("Action curve")
-        plt.xlabel("Simulation day")
-        plt.ylabel("Action")
-        plt.tight_layout()
-        log_fig("4B_action_curve_overall")
+        # ========== 4B) Action curve overall ==========
+        d_all = d[d["category"].str.lower() == "all"].copy()
+        if not d_all.empty:
+            plt.figure()
+            plt.plot(
+                d_all["day"].to_numpy(dtype=int),
+                d_all["value"].to_numpy(dtype=float),
+            )
+            plt.title("Overall action curve")
+            plt.xlabel("Simulation day")
+            plt.ylabel("Action")
+            plt.tight_layout()
+            log_fig("4B_action_curve_overall")
 
     # ========== 4C) Action coefficients per category ==========
     d = df[df["kind"] == "action_coeff"].copy()
@@ -234,7 +279,7 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
 
         for cat_val, g in d.groupby("cat", sort=True):
             pivot = (
-                g.pivot_table(index="day", columns="k", values="value", aggfunc="mean")
+                g.pivot_table(index="day", columns="k", values="value", aggfunc="first")
                 .sort_index()  # ordina per giorno
                 .sort_index(axis=1)  # ordina i coefficienti: k=0,1,2,...
             )
@@ -261,107 +306,56 @@ def plot_and_log_figures(df: pd.DataFrame, log_to_mlflow: bool = True) -> None:
     if not d.empty:
         d["day"] = pd.to_numeric(d["day"], errors="coerce")
         d["value"] = pd.to_numeric(d["value"], errors="coerce")
-        d = d.dropna(subset=["day", "value"]).sort_values("day")
+        d["category"] = d["category"].astype(str).str.strip()
+        d = d.dropna(subset=["day", "value"]).sort_values(["category", "day"])
 
-        plt.figure()
-        d.pivot_table(index="day", columns="category", values="value", aggfunc="mean").plot()
+        pivot = d.pivot_table(
+            index="day", columns="category", values="value", aggfunc="first"
+        ).sort_index()
 
-        plt.title("Daily price curve by category")
-        plt.xlabel("Day")
-        plt.ylabel("Price")
-        plt.legend()
-        plt.tight_layout()
-        log_fig("5_price_curve_by_category")
+        if not pivot.empty:
+            ax = pivot.plot()
+            ax.set_title("Daily price curve by category")
+            ax.set_xlabel("Day")
+            ax.set_ylabel("Price")
+            plt.tight_layout()
+            log_fig("5_price_curve_by_category")
 
     # ========== 6A) BAR levels for each category - only one figure ==========
     d = df[df["kind"] == "bar_level"].copy()
     if not d.empty:
         d["day"] = pd.to_numeric(d["day"], errors="coerce")
         d["value"] = pd.to_numeric(d["value"], errors="coerce")
-        d = d.dropna(subset=["day", "value"]).sort_values("day")
+        d["category"] = d["category"].astype(str).str.strip()
+        d = d.dropna(subset=["day", "value"]).sort_values(["category", "day"])
 
-        plt.figure()
-        d.pivot_table(index="day", columns="category", values="value", aggfunc="mean").plot()
-        plt.title("BAR levels")
-        plt.xlabel("Day")
-        plt.ylabel("BAR level")
-        plt.legend()
-        plt.tight_layout()
-        log_fig("6A_bar_levels_per_category")
+        pivot = d.pivot_table(
+            index="day", columns="category", values="value", aggfunc="first"
+        ).sort_index()
+        if not pivot.empty:
+            ax = pivot.plot()
+            ax.set_title("BAR levels")
+            ax.set_xlabel("Day")
+            ax.set_ylabel("BAR level")
+            plt.tight_layout()
+            log_fig("6A_bar_levels_per_category")
 
     # ========== 7) Average daily reward over simulation ==========
     d = df[df["kind"] == "reward_daily"].copy()
     if not d.empty:
         d["day"] = pd.to_numeric(d["day"], errors="coerce")
         d["value"] = pd.to_numeric(d["value"], errors="coerce")
-        d = d.dropna(subset=["day", "value"])
+        d = d.dropna(subset=["day", "value"]).sort_values("day")
 
         # Average on env and on all cycles for each day of simulation
-        daily_reward = d.groupby("day", sort=True)["value"].mean()
+        daily_reward = d.groupby("day", sort=True)["value"].sum()
 
         plt.figure()
         x = daily_reward.index.to_numpy(dtype=int)
         y = daily_reward.to_numpy(dtype=float)
         plt.plot(x, y)
-        plt.title("Average daily reward over simulation")
+        plt.title("Daily reward")
         plt.xlabel("Simulation day")
         plt.ylabel("Reward")
         plt.tight_layout()
         log_fig("7_daily_reward_avg")
-
-    # ========== 6B) BAR levels — one figure per category ==========
-    # d = df[df["kind"] == "bar_level"].copy()
-    # if not d.empty:
-    #     d["day"] = pd.to_numeric(d["day"], errors="coerce")
-    #     d["value"] = pd.to_numeric(d["value"], errors="coerce")
-    #     d = d.dropna(subset=["day", "value"]).sort_values("day")
-
-    #     # calculate the max level to draw the discrete tick
-    #     ymax = int(d["value"].max()) if not d.empty else 0
-    #     y_ticks = list(range(0, ymax + 1))
-
-    #     # for each category one plot
-    #     for cat, g in d.groupby("category", sort=True):
-    #         x = g["day"].to_numpy(dtype=int)
-    #         y = g["value"].to_numpy(dtype=float)
-
-    #         plt.figure()
-    #         plt.step(x, y, where="post")
-    #         plt.title(f"BAR levels — {cat}")
-    #         plt.xlabel("Day")
-    #         plt.ylabel("BAR level")
-    #         plt.yticks(y_ticks)
-    #         plt.ylim(-0.5, ymax + 0.5)
-    #         plt.tight_layout()
-    #         log_fig(f"6B_bar_levels_{str(cat).lower()}")
-
-    # ========== 6C) BAR levels histogram ==========
-    # d_hist = df[df["kind"] == "bar_level"].copy()
-    # if not d_hist.empty:
-    #     plt.figure()
-    #     plt.hist(
-    #         d_hist["value"],
-    #         bins=np.arange(d_hist["value"].min() - 0.5, d_hist["value"].max() + 1.5, 1),
-    #     )
-    #     plt.title("Distribution of BAR levels")
-    #     plt.xlabel("BAR level")
-    #     plt.ylabel("Count")
-    #     plt.tight_layout()
-    #     log_fig("6C_bar_levels_hist")
-
-    # ========== Prices for advances ==========
-
-    """
-    for k in (1, 15, 60):
-        d = df[df["kind"] == f"advance_{k}"].sort_values("day")
-        if not d.empty:
-            plt.figure()
-            for cat, g in d.groupby("category", sort=True):
-                plt.plot(g["day"], g["value"], label=str(cat))
-            plt.title(f"Advance {k} days")
-            plt.xlabel("Simulation day")
-            plt.ylabel("Price")
-            plt.legend()
-            plt.tight_layout()
-            log_fig(f"5_advance_{k}_days")
-    """
