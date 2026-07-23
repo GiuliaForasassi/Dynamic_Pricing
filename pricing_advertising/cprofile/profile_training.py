@@ -13,25 +13,25 @@ def main() -> None:
     # Load bar table
     csv_path = Path("data") / "bar_table.csv"
     set_bar_table_from_csv(csv_path)
+    start_simulation = date(2025, 1, 1)
+    end_simulation = date(2025, 6, 30)
+    n_envs = 1
+    total_timesteps = 500
+    n_steps = 32
     run_simulation(
-        # ======= TRAINING SCHEDULE =======
-        total_cycles=2,  # es. piccolino per profiling
-        steps_per_cycle=30,  # o meno se vuoi
-        # ======= PPO/ENV =======
-        n_envs=2,
-        n_steps=4,
-        learning_rate=1e-4,
-        gamma=0.99,
+        total_timesteps=total_timesteps,
+        n_envs=n_envs,
+        n_steps=n_steps,
+        learning_rate=3e-4,
+        gamma=0.995,
         n_epochs=10,
         policy="MultiInputPolicy",
-        # ======= EVAL =======
-        eval_episodes=3,
-        # ======= SIMULAZIONE HOTEL =======
-        start_simulation=date(2025, 1, 1),
-        end_simulation=date(2025, 1, 31),
-        num_category1_rooms=10,
-        num_category2_rooms=10,
-        num_category3_rooms=10,
+        eval_episodes=1,
+        start_simulation=start_simulation,
+        end_simulation=end_simulation,
+        num_category1_rooms=50,
+        num_category2_rooms=50,
+        num_category3_rooms=50,
         seed=SEEDS[0],
     )
 
