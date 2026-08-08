@@ -6,6 +6,7 @@ import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 from pricing_advertising.enums.enums import RoomCategory
+from pricing_advertising.plots.acceptance_rate_tracker import AcceptanceRateTracker
 from pricing_advertising.plots.occupancy_tracker import OccupancyTracker
 from pricing_advertising.plots.price_tracker import PriceTracker
 from pricing_advertising.plots.request_tracker import RequestTracker
@@ -62,6 +63,9 @@ class PlotCallback(BaseCallback):
         self._request_tracker = RequestTracker(split="train", log_to_mlflow=self.log_to_mlflow)
         self._reward_tracker = RewardTracker(split="train", log_to_mlflow=self.log_to_mlflow)
         self._price_tracker = PriceTracker(split="train", log_to_mlflow=self.log_to_mlflow)
+        self._acceptance_rate_tracker = AcceptanceRateTracker(
+            split="train", log_to_mlflow=self.log_to_mlflow
+        )
         self._num_rooms_cache: dict[int, list[int]] = {}
         self._price_tracker_initialized = False
 
@@ -102,14 +106,16 @@ class PlotCallback(BaseCallback):
             self._price_tracker.set_simulation_params(start_sim, simulation_days)
             self._price_tracker_initialized = True
 
-        # ---- I retrieve the attributes of the env I am considering ----
+        # ---- Retrieve simulation state ----
+        # Note: env increments `today` at the end of step(), so `today` is already the next day
+        # We need to track metrics for the day that just completed (today - 1 day)
         today = self._get_attr("today", env_idx)
         start_sim = self._get_attr("start_simulation", env_idx)
-        current_day_index = int((today - start_sim).days)
+        completed_day_index = int((today - start_sim).days) - 1
 
         num_rooms = self._get_num_rooms_by_cat(env_idx)
         occupancy = self._get_attr("occupancy", env_idx)
-        occ_pct = _compute_overall_occupancy_pct(occupancy, current_day_index, num_rooms)
+        occ_pct = _compute_overall_occupancy_pct(occupancy, completed_day_index, num_rooms)
         self._occupancy_tracker.record_day(occ_pct)
 
         # ---- Record request metrics ----
@@ -129,6 +135,15 @@ class PlotCallback(BaseCallback):
         final_prices = self._get_attr("last_final_prices", env_idx)
         self._price_tracker.record_request_prices(final_requests, final_prices)
 
+        # ---- Record acceptance rate metrics ----
+        accepted_by_day = self._get_attr("accepted_by_day", env_idx)
+        rejected_by_day = self._get_attr("rejected_by_day", env_idx)
+        total_accepted = float(accepted_by_day[:, completed_day_index].sum())
+        total_rejected = float(rejected_by_day[:, completed_day_index].sum())
+        if total_accepted + total_rejected > 0:
+            acceptance_rate = total_accepted / (total_accepted + total_rejected)
+            self._acceptance_rate_tracker.record_day(acceptance_rate)
+
         # ---- end episode detection ----
         dones = self.locals.get("dones")
         if dones is not None and dones[env_idx].item():
@@ -146,6 +161,12 @@ class PlotCallback(BaseCallback):
             if mean_price is not None:
                 self._price_tracker.log_step_metric(float(mean_price), step=self.num_timesteps)
 
+            mean_acceptance_rate = self._acceptance_rate_tracker.end_episode()
+            if mean_acceptance_rate is not None:
+                self._acceptance_rate_tracker.log_step_metric(
+                    float(mean_acceptance_rate), step=self.num_timesteps
+                )
+
         return True
 
     # ========== ON TRAINING ==========
@@ -154,6 +175,7 @@ class PlotCallback(BaseCallback):
         self._request_tracker.finalize_training()
         self._reward_tracker.finalize_training()
         self._price_tracker.finalize_training()
+        self._acceptance_rate_tracker.finalize_training()
 
 
 #################################### EVAL PLOT CALLBACK ##########################################
@@ -190,6 +212,9 @@ class EvalOccupancyCallback(EvalCallback):
         self._request_tracker = RequestTracker(split="val", log_to_mlflow=self.log_to_mlflow)
         self._reward_tracker = RewardTracker(split="val", log_to_mlflow=self.log_to_mlflow)
         self._price_tracker = PriceTracker(split="val", log_to_mlflow=self.log_to_mlflow)
+        self._acceptance_rate_tracker = AcceptanceRateTracker(
+            split="val", log_to_mlflow=self.log_to_mlflow
+        )
         self._num_rooms_cache: dict[int, list[int]] = {}
         self._price_tracker_initialized = False
         # Per-episode means collected during the eval round currently in progress.
@@ -198,6 +223,7 @@ class EvalOccupancyCallback(EvalCallback):
         self._round_t_reservation_means: list[float] = []
         self._round_reward_means: list[float] = []
         self._round_price_means: list[float] = []
+        self._round_acceptance_rate_means: list[float] = []
 
     def _get_num_rooms_by_cat(self, env: Any, idx: int) -> list[int]:  # noqa: ANN401
         if idx in self._num_rooms_cache:
@@ -225,13 +251,16 @@ class EvalOccupancyCallback(EvalCallback):
             self._price_tracker.set_simulation_params(start_sim, simulation_days)
             self._price_tracker_initialized = True
 
+        # ---- Retrieve simulation state ----
+        # Note: env increments `today` at the end of step(), so `today` is already the next day
+        # We need to track metrics for the day that just completed (today - 1 day)
         today = env.get_attr("today", indices=env_idx)[0]
         start_sim = env.get_attr("start_simulation", indices=env_idx)[0]
-        current_day_index = int((today - start_sim).days)
+        completed_day_index = int((today - start_sim).days) - 1
 
         num_rooms = self._get_num_rooms_by_cat(env, env_idx)
         occupancy = env.get_attr("occupancy", indices=env_idx)[0]
-        occ_pct = _compute_overall_occupancy_pct(occupancy, current_day_index, num_rooms)
+        occ_pct = _compute_overall_occupancy_pct(occupancy, completed_day_index, num_rooms)
         self._occupancy_tracker.record_day(occ_pct)
 
         # ---- Record request metrics ----
@@ -249,6 +278,15 @@ class EvalOccupancyCallback(EvalCallback):
         final_prices = env.get_attr("last_final_prices", indices=env_idx)[0]
         self._price_tracker.record_request_prices(final_requests, final_prices)
 
+        # ---- Record acceptance rate metrics ----
+        accepted_by_day = env.get_attr("accepted_by_day", indices=env_idx)[0]
+        rejected_by_day = env.get_attr("rejected_by_day", indices=env_idx)[0]
+        total_accepted = float(accepted_by_day[:, completed_day_index].sum())
+        total_rejected = float(rejected_by_day[:, completed_day_index].sum())
+        if total_accepted + total_rejected > 0:
+            acceptance_rate = total_accepted / (total_accepted + total_rejected)
+            self._acceptance_rate_tracker.record_day(acceptance_rate)
+
         if bool(locals_["done"]):
             mean_occ = self._occupancy_tracker.end_episode()
             if mean_occ is not None:
@@ -263,6 +301,10 @@ class EvalOccupancyCallback(EvalCallback):
             mean_price = self._price_tracker.end_episode()
             if mean_price is not None:
                 self._round_price_means.append(mean_price)
+
+            mean_acceptance_rate = self._acceptance_rate_tracker.end_episode()
+            if mean_acceptance_rate is not None:
+                self._round_acceptance_rate_means.append(mean_acceptance_rate)
 
     # Fires once per eval round (every `eval_freq` training steps): SB3's
     # EvalCallback._on_step() only calls evaluate_policy() (which drives
@@ -288,6 +330,12 @@ class EvalOccupancyCallback(EvalCallback):
             )
             self._round_price_means = []
 
+        if self._round_acceptance_rate_means:
+            self._acceptance_rate_tracker.log_step_metric(
+                float(np.mean(self._round_acceptance_rate_means)), step=self.num_timesteps
+            )
+            self._round_acceptance_rate_means = []
+
         return continue_training
 
     def _on_training_end(self) -> None:
@@ -296,3 +344,4 @@ class EvalOccupancyCallback(EvalCallback):
         self._request_tracker.finalize_training()
         self._reward_tracker.finalize_training()
         self._price_tracker.finalize_training()
+        self._acceptance_rate_tracker.finalize_training()
