@@ -23,7 +23,7 @@ class OccupancyTracker:
     """
 
     def __init__(self, split: str, log_to_mlflow: bool = True) -> None:
-        self.split = split
+        self.split = split  # train o val
         self.log_to_mlflow = log_to_mlflow
 
         self._episode_id: int = 0
@@ -43,9 +43,11 @@ class OccupancyTracker:
         if not self._episode_occ:
             return None
 
+        # Calculates the episode mean
         episode_occ = np.asarray(self._episode_occ, dtype=float)
         mean_occ = float(episode_occ.mean())
 
+        # Save an CSV artifact on MLflow
         if self.log_to_mlflow:
             buf = StringIO()
             writer = csv.writer(buf)
@@ -56,9 +58,11 @@ class OccupancyTracker:
                 f"episodes/{self.split}/episode_{self._episode_id:05d}_occupancy.csv",
             )
 
+        # Collect daily data
         if self._day_occ_sum is None or self._day_occ_count is None:
             self._day_occ_sum = np.zeros_like(episode_occ)
             self._day_occ_count = np.zeros_like(episode_occ, dtype=int)
+        # If episodes have different durantions we use padding
         if self._day_occ_sum.shape != episode_occ.shape:
             padding = np.zeros(len(self._day_occ_sum) - len(episode_occ))
             counts_considering_padding = np.concat(
@@ -81,9 +85,10 @@ class OccupancyTracker:
         comparable in the MLflow UI.
         """
         if self.log_to_mlflow:
-            mlflow.log_metric(f"occupancy/{self.split}", value, step=step)
+            mlflow.log_metric(f"occupancy/by_training_timesteps/{self.split}", value, step=step)
 
     def finalize_training(self) -> None:
+        # Closes the latest episode if there is one still in progress
         if self._episode_occ:
             self.end_episode()
 
@@ -91,6 +96,7 @@ class OccupancyTracker:
         if not self.log_to_mlflow or day_occ_sum is None or day_occ_count is None:
             return
 
+        # Calculates the avg occupancy taking into account all episodes and send this data to MLflow
         for day in range(len(day_occ_sum)):
             mlflow.log_metric(
                 f"occupancy/by_day/{self.split}",

@@ -151,6 +151,10 @@ class PricingEnv(gym.Env):
             variances=LOGISTIC_ACCEPTANCE_VARIANCES,
         )
 
+        # Store final requests and prices for tracker access
+        self.last_final_requests: np.ndarray = np.array([])
+        self.last_final_prices: np.ndarray = np.array([])
+
         # Attribute for counting accepted/rejected requests
         self.accepted_by_day = np.zeros(
             (self.num_room_categories, self.extended_simulation_days), dtype=np.int32
@@ -159,8 +163,8 @@ class PricingEnv(gym.Env):
 
         self.accepted_total = 0
         self.rejected_total = 0
+        self.last_day_avg_price = 0.0
 
-    # ========== GET OBSERVATION ==========
     def get_observation(self) -> dict:
         current_day_index = (self.today - self.start_simulation).days
         simulation_days = (self.end_simulation - self.start_simulation).days
@@ -331,6 +335,10 @@ class PricingEnv(gym.Env):
 
         # Calculate the revenue of accepted requests
         reward = self._calculate_reward(final_prices)
+
+        # Store for tracker access
+        self.last_final_requests = final_requests
+        self.last_final_prices = final_prices
 
         # Move to the next day
         self.today += timedelta(days=1)

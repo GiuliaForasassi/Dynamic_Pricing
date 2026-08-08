@@ -137,7 +137,7 @@ def run_simulation(
         # ============ Callback di valutazione ============
         eval_callback = EvalOccupancyCallback(
             eval_env,
-            eval_freq=100,  # todo: RIVEDI: valutare in base a num di env di training
+            eval_freq=500,  # todo: RIVEDI: valutare in base a num di env di training
             n_eval_episodes=eval_episodes,
             deterministic=True,
             render=False,

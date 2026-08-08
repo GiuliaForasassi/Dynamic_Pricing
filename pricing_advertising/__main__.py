@@ -14,9 +14,9 @@ if __name__ == "__main__":
 
     start_simulation = date(2025, 1, 1)
     end_simulation = date(2025, 12, 31)
-    n_envs = 1
-    total_timesteps = 1500
-    n_steps = 64
+    n_envs = 4
+    total_timesteps = 5000
+    n_steps = 512
 
     episode_len = (end_simulation - start_simulation).days
     rollout_size = n_steps * n_envs
