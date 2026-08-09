@@ -15,8 +15,8 @@ if __name__ == "__main__":
     start_simulation = date(2025, 1, 1)
     end_simulation = date(2025, 12, 31)
     n_envs = 4
-    total_timesteps = 5000
-    n_steps = 512
+    total_timesteps = 8000
+    n_steps = 500
 
     episode_len = (end_simulation - start_simulation).days
     rollout_size = n_steps * n_envs
@@ -40,11 +40,18 @@ if __name__ == "__main__":
         n_epochs=10,
         policy="MultiInputPolicy",
         eval_episodes=1,
+        eval_frequency=500,
         start_simulation=start_simulation,
         end_simulation=end_simulation,
-        num_category1_rooms=50,
-        num_category2_rooms=50,
-        num_category3_rooms=50,
+        num_category1_rooms=100,
+        num_category2_rooms=100,
+        num_category3_rooms=100,
+        price_plot_request_dates=[
+            (2025, 2, 28),
+            (2025, 5, 15),
+            (2025, 8, 1),
+            (2025, 11, 12),
+        ],
         seed=SEEDS[0],
     )
     print(f"Final eval mean reward: {final_mean_reward:.3f}")

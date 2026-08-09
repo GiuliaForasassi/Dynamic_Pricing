@@ -18,7 +18,11 @@ import pricing_advertising.environment.__init__  # noqa: F401
 
 # your imports
 from pricing_advertising.hotel.hotel import Hotel
+from pricing_advertising.plots.acceptance_plot_callback import AcceptancePlotCallback
 from pricing_advertising.plots.plot_callback import EvalOccupancyCallback, PlotCallback
+from pricing_advertising.plots.price_plot_callback import PricePlotCallback
+from pricing_advertising.plots.request_plot_callback import RequestPlotCallback
+from pricing_advertising.plots.reward_plot_callback import RewardPlotCallback
 from pricing_advertising.utils.constants import SEEDS
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
@@ -45,6 +49,9 @@ def run_simulation(
     num_category3_rooms: int,
     # ======= SEED =======
     seed: int,
+    # ======= OPTIONAL PARAMETERS =======
+    eval_frequency: int,
+    price_plot_request_dates: list[tuple[int, int, int]] | None = None,
 ) -> float:
     # ============ MLFLOW SETUP ============
     mlflow.set_experiment("PricingEnv_Simulation")
@@ -134,10 +141,50 @@ def run_simulation(
             track_env_idx=0,
         )
 
+        # ============ Price plot callback ============
+        price_plot_callback = PricePlotCallback(
+            eval_freq=eval_frequency,
+            n_envs=n_envs,
+            log_to_mlflow=True,
+            track_env_idx=0,
+        )
+        if price_plot_request_dates:
+            price_plot_callback.set_request_dates(price_plot_request_dates)
+
+        # ============ Acceptance plot callback ============
+        acceptance_plot_callback = AcceptancePlotCallback(
+            eval_freq=eval_frequency,
+            n_envs=n_envs,
+            log_to_mlflow=True,
+            track_env_idx=0,
+        )
+        if price_plot_request_dates:
+            acceptance_plot_callback.set_request_dates(price_plot_request_dates)
+
+        # ============ Reward plot callback ============
+        reward_plot_callback = RewardPlotCallback(
+            eval_freq=eval_frequency,
+            n_envs=n_envs,
+            log_to_mlflow=True,
+            track_env_idx=0,
+        )
+        if price_plot_request_dates:
+            reward_plot_callback.set_request_dates(price_plot_request_dates)
+
+        # ============ Request plot callback ============
+        request_plot_callback = RequestPlotCallback(
+            eval_freq=eval_frequency,
+            n_envs=n_envs,
+            log_to_mlflow=True,
+            track_env_idx=0,
+        )
+        if price_plot_request_dates:
+            request_plot_callback.set_request_dates(price_plot_request_dates)
+
         # ============ Callback di valutazione ============
         eval_callback = EvalOccupancyCallback(
             eval_env,
-            eval_freq=500,  # todo: RIVEDI: valutare in base a num di env di training
+            eval_freq=eval_frequency,
             n_eval_episodes=eval_episodes,
             deterministic=True,
             render=False,
@@ -147,7 +194,16 @@ def run_simulation(
         )
 
         # ============ List of callbacks ============
-        callback = CallbackList([plot_callback, eval_callback])
+        callback = CallbackList(
+            [
+                plot_callback,
+                price_plot_callback,
+                acceptance_plot_callback,
+                reward_plot_callback,
+                request_plot_callback,
+                eval_callback,
+            ]
+        )
 
         # --- Train on the same model ---
         model.learn(
