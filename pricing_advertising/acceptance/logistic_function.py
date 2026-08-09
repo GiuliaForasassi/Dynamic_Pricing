@@ -11,12 +11,12 @@ from pricing_advertising.requests.request import Request
 
 
 class LogisticAcceptanceModel(ABCAcceptanceModel):
-    def __init__(self, beta: float, avg_prices: dict, variances: dict) -> None:
+    def __init__(self, beta: float, avg_prices: dict, st_deviations: dict) -> None:
         # Beta parameter: check how sensitive the probability is to the difference between the proposed price and the reference price
         self.beta = beta
         # dictionaries with avg price and variance per category
         self.avg_prices = avg_prices
-        self.variances = variances
+        self.st_deviations = st_deviations
         # can add season_factor to handle the seasonality of the prices
 
         # --- DEBUG counters ---
@@ -28,7 +28,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         los = max(1, int(request.days_stay))
         proposed_daily = proposed_price / los
 
-        variance = self.variances[category.value]
+        st_deviations = self.st_deviations[category.value]
         avg_price = self.avg_prices[category.value]
 
         # generate the reference price for the client for the requested category
@@ -38,7 +38,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
             reference_price=reference_price,
             proposed_price=proposed_daily,
             beta=self.beta,
-            variance=variance,
+            standard_deviation=st_deviations,
             avg_price=avg_price,
         )
         # penalty if you propose an alternative: the acceptance is reduced by 20%
@@ -76,8 +76,7 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
 
     def generate_reference_price(self, category: RoomCategory) -> float:
         avg_price = self.avg_prices[category.value]
-        variance = self.variances[category.value]
-        std = np.sqrt(variance)
+        std = self.st_deviations[category.value]
 
         reference_price = norm.rvs(loc=avg_price, scale=std)
         return max(0, reference_price)
@@ -87,14 +86,14 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
         proposed_price: float,
         reference_price: float,
         beta: float,
-        variance: float,
+        standard_deviation: float,
         avg_price: float,
     ) -> float:
         # Calculate the z-score respect to the average price: how many standard deviations away from the mean
-        z_score = (proposed_price - avg_price) / np.sqrt(variance)
+        z_score = (proposed_price - avg_price) / standard_deviation
 
         # Calculate the correction factor based on the reference price
-        correction_factor = (reference_price - avg_price) / np.sqrt(variance)
+        correction_factor = (reference_price - avg_price) / standard_deviation
 
         # x measures how the proposed price is below or above the reference price
         x = beta * (z_score - correction_factor)
@@ -111,14 +110,16 @@ if __name__ == "__main__":
         RoomCategory.CATEGORY2: 150,
         RoomCategory.CATEGORY3: 200,
     }
-    variances = {
+    st_deviations = {
         RoomCategory.CATEGORY1: 50,
         RoomCategory.CATEGORY2: 75,
         RoomCategory.CATEGORY3: 100,
     }
     beta = 0.1
 
-    logistic_model = LogisticAcceptanceModel(beta=beta, avg_prices=avg_prices, variances=variances)
+    logistic_model = LogisticAcceptanceModel(
+        beta=beta, avg_prices=avg_prices, st_deviations=st_deviations
+    )
     request = Request(
         t_request=date.today(), t_reservation=date(2025, 3, 30), days_stay=3, num_guests=2
     )
@@ -129,16 +130,18 @@ if __name__ == "__main__":
 
     # Negative beta test
     try:
-        LogisticAcceptanceModel(beta=-0.1, avg_prices=avg_prices, variances=variances)
+        LogisticAcceptanceModel(beta=-0.1, avg_prices=avg_prices, st_deviations=st_deviations)
         logger.warning("Negative beta test: Model initialized with negative beta!")
     except ValueError:
         logger.info("Correctly captured negative beta error.")
 
     # Zero beta test
-    zero_beta_model = LogisticAcceptanceModel(beta=0, avg_prices=avg_prices, variances=variances)
+    zero_beta_model = LogisticAcceptanceModel(
+        beta=0, avg_prices=avg_prices, st_deviations=st_deviations
+    )
     assert (
         zero_beta_model.logistic_function(
-            proposed_price=110, reference_price=100, beta=0, variance=50, avg_price=100
+            proposed_price=110, reference_price=100, beta=0, standard_deviation=50, avg_price=100
         )
         == 0.5
     ), "Zero beta should return 0.5 probability"

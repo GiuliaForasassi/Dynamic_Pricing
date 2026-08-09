@@ -59,16 +59,16 @@ SIMPLE_ACCEPTANCE_THRESHOLD_CATEGORY3 = 200
 LOGISTIC_ACCEPTANCE_BETA = 1
 
 LOGISTIC_ACCEPTANCE_AVG_PRICES = {
-    1: 200,
-    2: 300,
-    3: 400,
+    1: 400,
+    2: 500,
+    3: 550,
 }
 
 # 1/4 of the avg price
-LOGISTIC_ACCEPTANCE_VARIANCES = {
-    1: 900,
-    2: 2025,
-    3: 3600,
+LOGISTIC_ACCEPTANCE_STDS = {
+    1: 30,
+    2: 45,
+    3: 60,
 }
 
 ################# ENVIRONMENT PARAMETERS ####################

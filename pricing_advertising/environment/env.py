@@ -25,7 +25,7 @@ from pricing_advertising.utils.constants import (
     HIGH_SEASON,
     LOGISTIC_ACCEPTANCE_AVG_PRICES,
     LOGISTIC_ACCEPTANCE_BETA,
-    LOGISTIC_ACCEPTANCE_VARIANCES,
+    LOGISTIC_ACCEPTANCE_STDS,
     MAX_AVG_NUM_REQUESTS,
     MIN_AVG_NUM_REQUESTS,
     NUM_COEFFICIENTS,
@@ -148,7 +148,7 @@ class PricingEnv(gym.Env):
         self.acceptance_model = acceptance_model or LogisticAcceptanceModel(
             beta=LOGISTIC_ACCEPTANCE_BETA,
             avg_prices=LOGISTIC_ACCEPTANCE_AVG_PRICES,
-            variances=LOGISTIC_ACCEPTANCE_VARIANCES,
+            st_deviations=LOGISTIC_ACCEPTANCE_STDS,
         )
 
         # Store final requests and prices for tracker access
