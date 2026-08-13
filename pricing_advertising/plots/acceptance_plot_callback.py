@@ -54,7 +54,11 @@ class AcceptancePlotCallback(BaseCallback):
         self._simulation_days: int | None = None
         self._initialized = False
 
-        # Track acceptance counts by (t_request, t_reservation)
+        # Track request count by (t_request, t_reservation)
+        # Structure: dict[t_request] -> dict[t_reservation] -> count of requests
+        self._requests_by_request: dict[date, dict[date, int]] = {}
+
+        # Track acceptance count by (t_request, t_reservation)
         # Structure: dict[t_request] -> dict[t_reservation] -> count of acceptances
         self._acceptances_by_request: dict[date, dict[date, int]] = {}
 
@@ -110,6 +114,26 @@ class AcceptancePlotCallback(BaseCallback):
 
             self._acceptances_by_request[t_request][current_t_reservation] += 1
 
+    def record_requests(self, t_request: date, t_reservation: date, num_days: int) -> None:
+        """Record a request's occupancy days.
+
+        Args:
+            t_request: The request date.
+            t_reservation: The check-in date (occupancy start).
+            num_days: Number of days for the stay.
+        """
+        if t_request not in self._requests_by_request:
+            self._requests_by_request[t_request] = {}
+
+        # Record request for each day of the stay
+        for day_offset in range(num_days):
+            current_t_reservation = t_reservation + timedelta(days=day_offset)
+
+            if current_t_reservation not in self._requests_by_request[t_request]:
+                self._requests_by_request[t_request][current_t_reservation] = 0
+
+            self._requests_by_request[t_request][current_t_reservation] += 1
+
     def _generate_plot_for_request_date(self, t_request: date, eval_step: int) -> bytes:
         """Generate an acceptance plot for a specific request date.
 
@@ -127,16 +151,21 @@ class AcceptancePlotCallback(BaseCallback):
         ):
             raise ValueError("Invalid state for plot generation")
 
-        # Collect acceptance counts for each reservation day
+        # Collect acceptance probabilities for each reservation day
         reservation_days = []
-        acceptance_counts = []
+        acceptance_probabilities = []
 
         # Generate days from t_request to end_simulation
         current_day = t_request
         while current_day <= self._end_simulation:
-            count = self._acceptances_by_request[t_request].get(current_day, 0)
+            total = self._requests_by_request[t_request].get(current_day, 0)
+            accepted = self._acceptances_by_request[t_request].get(current_day, 0)
+
+            # Calculate probability (0 if no requests)
+            prob = accepted / total if total > 0 else 0.0
+
             reservation_days.append(current_day)
-            acceptance_counts.append(count)
+            acceptance_probabilities.append(prob)
             current_day += timedelta(days=1)
 
         # Convert days to day-of-year indices for plotting (starting from simulation start)
@@ -145,11 +174,17 @@ class AcceptancePlotCallback(BaseCallback):
         # Create plot
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.plot(
-            day_indices, acceptance_counts, marker="o", linestyle="-", linewidth=1.5, markersize=3
+            day_indices,
+            acceptance_probabilities,
+            marker="o",
+            linestyle="-",
+            linewidth=1.5,
+            markersize=3,
         )
         ax.set_xlabel("Day of Year")
-        ax.set_ylabel("Acceptance Count")
-        ax.set_title(f"Acceptance Count - Request Date: {t_request.strftime('%Y-%m-%d')}")
+        ax.set_ylabel("Acceptance Probability")
+        ax.set_title(f"Acceptance Probability - Request Date: {t_request.strftime('%Y-%m-%d')}")
+        ax.set_ylim([0, 1])
         ax.grid(True, alpha=0.3)
 
         # Convert to bytes
@@ -193,6 +228,11 @@ class AcceptancePlotCallback(BaseCallback):
             except Exception as e:
                 print(f"Error generating acceptance plot for request date {t_request}: {e}")
 
+    def _reset_metrics(self) -> None:
+        """Clear acceptance metrics for the next evaluation period."""
+        self._requests_by_request.clear()
+        self._acceptances_by_request.clear()
+
     def _on_step(self) -> bool:
         """Called after each environment step."""
         if not self._initialized:
@@ -203,13 +243,21 @@ class AcceptancePlotCallback(BaseCallback):
         if env_idx < 0 or env_idx >= n_envs:
             return True
 
-        # Get the final requests from the current step
+        # Get both total requests and final (accepted) requests from the environment
         try:
+            total_requests = self._get_attr("last_total_requests", env_idx)
             final_requests = self._get_attr("last_final_requests", env_idx)
         except (AttributeError, IndexError):
+            total_requests = None
             final_requests = None
 
-        # Process each accepted request
+        # Record total requests first
+        if total_requests is not None and len(total_requests) > 0:
+            for req in total_requests:
+                num_days = req.days_stay
+                self.record_requests(req.t_request, req.t_reservation, num_days)
+
+        # Then record accepted requests
         if final_requests is not None and len(final_requests) > 0:
             for req in final_requests:
                 num_days = req.days_stay
@@ -218,6 +266,7 @@ class AcceptancePlotCallback(BaseCallback):
         # Generate plots at the evaluation frequency
         if self.num_timesteps % self.plot_freq == 0 and self.num_timesteps > 0:
             self._generate_all_plots()
+            self._reset_metrics()
 
         return True
 

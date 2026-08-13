@@ -15,7 +15,7 @@ if __name__ == "__main__":
     start_simulation = date(2025, 1, 1)
     end_simulation = date(2025, 12, 31)
     n_envs = 4
-    total_timesteps = 8000
+    total_timesteps = 52000
     n_steps = 500
 
     episode_len = (end_simulation - start_simulation).days
@@ -30,7 +30,6 @@ if __name__ == "__main__":
     print("effective_timesteps =", effective_timesteps)
     print("expected_logged_episodes =", expected_logged_episodes)
 
-    # choose values; must be --> n_steps % n_envs == 0
     final_mean_reward = run_simulation(
         total_timesteps=total_timesteps,
         n_envs=n_envs,
@@ -40,7 +39,7 @@ if __name__ == "__main__":
         n_epochs=10,
         policy="MultiInputPolicy",
         eval_episodes=1,
-        eval_frequency=500,
+        eval_frequency=1000,
         start_simulation=start_simulation,
         end_simulation=end_simulation,
         num_category1_rooms=100,

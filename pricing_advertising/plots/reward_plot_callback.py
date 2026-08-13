@@ -207,6 +207,11 @@ class RewardPlotCallback(BaseCallback):
             except Exception as e:
                 print(f"Error generating reward plot for request date {t_request}: {e}")
 
+    def _reset_metrics(self) -> None:
+        """Clear reward metrics for the next evaluation period."""
+        self._rewards_by_request.clear()
+        self._reward_counts_by_request.clear()
+
     def _on_step(self) -> bool:
         """Called after each environment step."""
         if not self._initialized:
@@ -239,6 +244,7 @@ class RewardPlotCallback(BaseCallback):
         # Generate plots at the evaluation frequency
         if self.num_timesteps % self.plot_freq == 0 and self.num_timesteps > 0:
             self._generate_all_plots()
+            self._reset_metrics()
 
         return True
 

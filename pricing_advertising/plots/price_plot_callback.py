@@ -212,6 +212,11 @@ class PricePlotCallback(BaseCallback):
             except Exception as e:
                 print(f"Error generating plot for request date {t_request}: {e}")
 
+    def _reset_metrics(self) -> None:
+        """Clear price metrics for the next evaluation period."""
+        self._prices_by_request.clear()
+        self._price_counts_by_request.clear()
+
     def _on_step(self) -> bool:
         """Called after each environment step."""
         if not self._initialized:
@@ -250,6 +255,7 @@ class PricePlotCallback(BaseCallback):
         # Generate plots at the evaluation frequency
         if self.num_timesteps % self.plot_freq == 0 and self.num_timesteps > 0:
             self._generate_all_plots()
+            self._reset_metrics()
 
         return True
 
