@@ -19,6 +19,7 @@ import pricing_advertising.environment.__init__  # noqa: F401
 # your imports
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.plots.acceptance_plot_callback import AcceptancePlotCallback
+from pricing_advertising.plots.bar_level_acceptance_callback import AcceptanceByBarLevelCallback
 from pricing_advertising.plots.plot_callback import EvalOccupancyCallback, PlotCallback
 from pricing_advertising.plots.price_plot_callback import PricePlotCallback
 from pricing_advertising.plots.request_plot_callback import RequestPlotCallback
@@ -181,6 +182,16 @@ def run_simulation(
         if price_plot_request_dates:
             request_plot_callback.set_request_dates(price_plot_request_dates)
 
+        # ============ Bar level acceptance plot callback ============
+        bar_level_acceptance_callback = AcceptanceByBarLevelCallback(
+            eval_freq=eval_frequency,
+            n_envs=n_envs,
+            log_to_mlflow=True,
+            track_env_idx=0,
+        )
+        if price_plot_request_dates:
+            bar_level_acceptance_callback.set_request_dates(price_plot_request_dates)
+
         # ============ Callback di valutazione ============
         eval_callback = EvalOccupancyCallback(
             eval_env,
@@ -201,6 +212,7 @@ def run_simulation(
                 acceptance_plot_callback,
                 reward_plot_callback,
                 request_plot_callback,
+                bar_level_acceptance_callback,
                 eval_callback,
             ]
         )

@@ -153,6 +153,8 @@ class PricingEnv(gym.Env):
 
         # Store final requests and prices for tracker access
         self.last_total_requests: np.ndarray = np.array([])
+        self.last_valid_requests: np.ndarray = np.array([])
+        self.last_valid_prices: np.ndarray = np.array([])
         self.last_final_requests: np.ndarray = np.array([])
         self.last_final_prices: np.ndarray = np.array([])
 
@@ -339,6 +341,8 @@ class PricingEnv(gym.Env):
 
         # Store for tracker access
         self.last_total_requests = requests
+        self.last_valid_requests = valid_requests
+        self.last_valid_prices = tot_prices
         self.last_final_requests = final_requests
         self.last_final_prices = final_prices
 

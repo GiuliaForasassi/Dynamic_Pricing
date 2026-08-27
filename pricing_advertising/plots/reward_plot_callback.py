@@ -193,7 +193,7 @@ class RewardPlotCallback(BaseCallback):
 
                 # Create artifact path with request date as folder and step count in filename
                 request_date_str = t_request.strftime("%Y-%m-%d")
-                filename = f"{eval_step}_eval_timesteps.png"
+                filename = f"{eval_step:08d}_eval_timesteps.png"
                 artifact_path = f"reward_plots/{request_date_str}"
 
                 if self.log_to_mlflow:

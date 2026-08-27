@@ -15,7 +15,7 @@ if __name__ == "__main__":
     start_simulation = date(2025, 1, 1)
     end_simulation = date(2025, 12, 31)
     n_envs = 4
-    total_timesteps = 52000
+    total_timesteps = 500000
     n_steps = 500
 
     episode_len = (end_simulation - start_simulation).days
@@ -39,7 +39,7 @@ if __name__ == "__main__":
         n_epochs=10,
         policy="MultiInputPolicy",
         eval_episodes=1,
-        eval_frequency=1000,
+        eval_frequency=20000,
         start_simulation=start_simulation,
         end_simulation=end_simulation,
         num_category1_rooms=100,
