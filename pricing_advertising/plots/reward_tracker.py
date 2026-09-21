@@ -2,104 +2,135 @@ from __future__ import annotations
 
 import csv
 from io import StringIO
+from math import isfinite
 
 import mlflow
 import numpy as np
 
 
 class RewardTracker:
-    """Accumulates per-day reward and logs it to mlflow, per training split.
+    """Reward per giorno di richiesta, su episodi completi.
 
-    Two metrics are produced (keys suffixed with `split`, e.g. "train"/"val"):
-      - "reward/by_training_timestep/{split}": mean reward over an episode (or, for eval,
-        over a whole eval round), logged against a caller-supplied `step` (typically
-        `num_timesteps`, so train/val curves share the same x-axis and can be
-        overlaid/compared in the MLflow UI). See `end_episode`/`log_step_metric`.
-      - "reward/by_day/{split}": one point per simulation day, averaged
-        across all episodes seen so far, logged once `finalize_training` is
-        called (i.e. at the end of training).
+    Registra:
+    - ritorno non scontato dell'episodio;
+    - reward medio giornaliero dell'episodio;
+    - reward per giorno, mediato sugli episodi completi della run.
 
-    A CSV artifact (`day,reward`) is also logged per episode.
+    In evaluation i riepiloghi temporali vengono mediati sugli episodi
+    del singolo checkpoint.
     """
 
     def __init__(self, split: str, log_to_mlflow: bool = True) -> None:
-        self.split = split  # train or val
+        self.split = split
         self.log_to_mlflow = log_to_mlflow
 
-        self._episode_id: int = 0
-        self._episode_reward: list[float] = []
+        self._simulation_days: int | None = None
+        self._episode_rewards: list[float] = []
+        self._episode_id = 0
 
         self._day_reward_sum: np.ndarray | None = None
-        self._day_reward_count: np.ndarray | None = None
+        self._completed_episodes = 0
 
-    def record_day(self, reward: float) -> None:
-        self._episode_reward.append(float(reward))
+        self._pending_return_sum = 0.0
+        self._pending_episodes = 0
 
-    def end_episode(self) -> float | None:
-        """Flush the current episode: write its CSV artifact, accumulate its
-        per-day values into the running by-day averages, and return the
-        episode's mean reward (or None if no data was recorded).
-        """
-        if not self._episode_reward:
-            return None
+    def record_day(
+        self,
+        *,
+        day_index: int,
+        simulation_days: int,
+        reward: float,
+    ) -> None:
+        if simulation_days <= 0:
+            raise ValueError("Durata della simulazione non positiva.")
 
-        # Calculates the episode mean
-        episode_reward = np.asarray(self._episode_reward, dtype=float)
-        mean_reward = float(episode_reward.mean())
+        if self._simulation_days is not None and simulation_days != self._simulation_days:
+            raise ValueError("Durata cambiata: usare un tracker separato.")
 
-        # Save a CSV artifact on MLflow
+        if day_index != len(self._episode_rewards) or not 0 <= day_index < simulation_days:
+            raise ValueError("Giorno mancante, duplicato o fuori sequenza.")
+
+        value = float(reward)
+        if not isfinite(value):
+            raise ValueError("Il reward deve essere finito.")
+
+        if self._simulation_days is None:
+            self._simulation_days = simulation_days
+            self._day_reward_sum = np.zeros(simulation_days, dtype=float)
+
+        self._episode_rewards.append(value)
+
+    def end_episode(self) -> None:
+        if not self._episode_rewards:
+            return
+
+        if len(self._episode_rewards) != self._simulation_days:
+            raise ValueError("Impossibile chiudere un episodio incompleto.")
+
+        assert self._day_reward_sum is not None
+
+        rewards = np.asarray(self._episode_rewards, dtype=float)
+        episode_return = float(rewards.sum())
+
         if self.log_to_mlflow:
             buf = StringIO()
             writer = csv.writer(buf)
             writer.writerow(["day", "reward"])
-            writer.writerows(enumerate(self._episode_reward))
+            writer.writerows(enumerate(self._episode_rewards, start=1))
             mlflow.log_text(
                 buf.getvalue(),
                 f"episodes/{self.split}/episode_{self._episode_id:05d}_reward.csv",
             )
 
-        # Collect daily data
-        if self._day_reward_sum is None or self._day_reward_count is None:
-            self._day_reward_sum = np.zeros_like(episode_reward)
-            self._day_reward_count = np.zeros_like(episode_reward, dtype=int)
-        # If episodes have different durations we use padding
-        if self._day_reward_sum.shape != episode_reward.shape:
-            padding = np.zeros(len(self._day_reward_sum) - len(episode_reward))
-            counts_considering_padding = np.concatenate(
-                [np.ones_like(episode_reward), np.zeros_like(padding)]
-            ).astype(np.int64)
-            episode_reward = np.concatenate([episode_reward, padding])
-            self._day_reward_count += counts_considering_padding
-        else:
-            self._day_reward_count += 1
-        self._day_reward_sum += episode_reward
+        self._day_reward_sum += rewards
+        self._completed_episodes += 1
 
-        self._episode_reward = []
+        self._pending_return_sum += episode_return
+        self._pending_episodes += 1
+
+        self._episode_rewards.clear()
         self._episode_id += 1
 
-        return mean_reward
-
-    def log_step_metric(self, value: float, step: int) -> None:
-        """Log a single scalar (e.g. mean episode reward) against `step`
-        (typically `num_timesteps`), so train/val curves are directly
-        comparable in the MLflow UI.
-        """
-        if self.log_to_mlflow:
-            mlflow.log_metric(f"reward/by_training_timestep/{self.split}", value, step=step)
-
-    def finalize_training(self) -> None:
-        # Closes the latest episode if there is one still in progress
-        if self._episode_reward:
-            self.end_episode()
-
-        day_reward_sum, day_reward_count = self._day_reward_sum, self._day_reward_count
-        if not self.log_to_mlflow or day_reward_sum is None or day_reward_count is None:
+    def log_step_metrics(self, step: int) -> None:
+        if self._pending_episodes == 0:
             return
 
-        # Calculates the avg reward taking into account all episodes and send this data to MLflow
-        for day in range(len(day_reward_sum)):
+        assert self._simulation_days is not None
+
+        mean_episode_return = self._pending_return_sum / self._pending_episodes
+        mean_daily_reward = mean_episode_return / self._simulation_days
+
+        if self.log_to_mlflow:
             mlflow.log_metric(
-                f"reward/by_day/{self.split}",
-                float(day_reward_sum[day] / day_reward_count[day]),
-                step=day,
+                f"episode_return/by_training_timesteps/{self.split}",
+                float(mean_episode_return),
+                step=step,
+            )
+            mlflow.log_metric(
+                f"mean_daily_reward/by_training_timesteps/{self.split}",
+                float(mean_daily_reward),
+                step=step,
+            )
+
+        self._pending_return_sum = 0.0
+        self._pending_episodes = 0
+
+    def finalize_training(self) -> None:
+        # Scartiamo l'episodio incompleto: non va mediato con quelli completi.
+        self._episode_rewards.clear()
+
+        # I punti temporali sono registrati dai callback, non qui.
+        self._pending_return_sum = 0.0
+        self._pending_episodes = 0
+
+        if not self.log_to_mlflow or self._completed_episodes == 0:
+            return
+
+        assert self._day_reward_sum is not None
+
+        for day_index, total in enumerate(self._day_reward_sum):
+            mlflow.log_metric(
+                (f"reward/by_request_day/mean_completed_episodes/{self.split}"),
+                float(total / self._completed_episodes),
+                step=day_index + 1,
             )

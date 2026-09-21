@@ -2,104 +2,121 @@ from __future__ import annotations
 
 import csv
 from io import StringIO
+from math import isfinite
 
 import mlflow
 import numpy as np
 
 
 class OccupancyTracker:
-    """Accumulates per-day occupancy and logs it to mlflow, per training split.
+    """Occupazione percentuale della notte corrente, su episodi completi.
 
-    Two metrics are produced (keys suffixed with `split`, e.g. "train"/"val"):
-      - "occupancy/{split}": mean occupancy over an episode (or, for eval, over
-        a whole eval round), logged against a caller-supplied `step` (typically
-        `num_timesteps`, so train/val curves share the same x-axis and can be
-        overlaid/compared in the MLflow UI). See `end_episode`/`log_step_metric`.
-      - "occupancy/by_day/{split}": one point per simulation day, averaged
-        across all episodes seen so far, logged once `finalize_training` is
-        called (i.e. at the end of training).
-
-    A CSV artifact (`day,occupancy_pct`) is also logged per episode.
+    La durata deve essere costante per il tracker.
+    La media temporale rappresenta l'utilizzo delle camere-notte
+    quando la capacità dell'hotel è costante.
     """
 
     def __init__(self, split: str, log_to_mlflow: bool = True) -> None:
-        self.split = split  # train o val
+        self.split = split
         self.log_to_mlflow = log_to_mlflow
 
-        self._episode_id: int = 0
+        self._simulation_days: int | None = None
         self._episode_occ: list[float] = []
+        self._episode_id = 0
 
         self._day_occ_sum: np.ndarray | None = None
-        self._day_occ_count: np.ndarray | None = None
+        self._completed_episodes = 0
 
-    def record_day(self, occupancy_pct: float) -> None:
-        self._episode_occ.append(float(occupancy_pct))
+        self._pending_mean_sum = 0.0
+        self._pending_episodes = 0
 
-    def end_episode(self) -> float | None:
-        """Flush the current episode: write its CSV artifact, accumulate its
-        per-day values into the running by-day averages, and return the
-        episode's mean occupancy (or None if no data was recorded).
-        """
+    def record_day(
+        self,
+        *,
+        day_index: int,
+        simulation_days: int,
+        occupancy_pct: float,
+    ) -> None:
+        if simulation_days <= 0:
+            raise ValueError("Durata della simulazione non positiva.")
+
+        if self._simulation_days is not None and simulation_days != self._simulation_days:
+            raise ValueError("Durata cambiata: usare un tracker separato.")
+
+        if day_index != len(self._episode_occ) or not 0 <= day_index < simulation_days:
+            raise ValueError("Giorno mancante, duplicato o fuori sequenza.")
+
+        value = float(occupancy_pct)
+        if not isfinite(value) or not 0.0 <= value <= 100.0:
+            raise ValueError("Occupancy non valida: deve essere finita e tra 0 e 100.")
+
+        if self._simulation_days is None:
+            self._simulation_days = simulation_days
+            self._day_occ_sum = np.zeros(simulation_days, dtype=float)
+
+        self._episode_occ.append(value)
+
+    def end_episode(self) -> None:
         if not self._episode_occ:
-            return None
+            return
 
-        # Calculates the episode mean
-        episode_occ = np.asarray(self._episode_occ, dtype=float)
-        mean_occ = float(episode_occ.mean())
+        if len(self._episode_occ) != self._simulation_days:
+            raise ValueError("Impossibile chiudere un episodio incompleto.")
 
-        # Save an CSV artifact on MLflow
+        assert self._day_occ_sum is not None
+
+        occupancy = np.asarray(self._episode_occ, dtype=float)
+        mean_occupancy = float(occupancy.mean())
+
         if self.log_to_mlflow:
             buf = StringIO()
             writer = csv.writer(buf)
             writer.writerow(["day", "occupancy_pct"])
-            writer.writerows(enumerate(self._episode_occ))
+            writer.writerows(enumerate(self._episode_occ, start=1))
             mlflow.log_text(
                 buf.getvalue(),
-                f"episodes/{self.split}/episode_{self._episode_id:05d}_occupancy.csv",
+                (f"episodes/{self.split}/episode_{self._episode_id:05d}_occupancy.csv"),
             )
 
-        # Collect daily data
-        if self._day_occ_sum is None or self._day_occ_count is None:
-            self._day_occ_sum = np.zeros_like(episode_occ)
-            self._day_occ_count = np.zeros_like(episode_occ, dtype=int)
-        # If episodes have different durantions we use padding
-        if self._day_occ_sum.shape != episode_occ.shape:
-            padding = np.zeros(len(self._day_occ_sum) - len(episode_occ))
-            counts_considering_padding = np.concat(
-                [np.ones_like(episode_occ), np.zeros_like(padding)]
-            ).astype(np.int64)
-            episode_occ = np.concat([episode_occ, padding])
-            self._day_occ_count += counts_considering_padding
-        else:
-            self._day_occ_count += 1
-        self._day_occ_sum += episode_occ
+        self._day_occ_sum += occupancy
+        self._completed_episodes += 1
 
-        self._episode_occ = []
+        self._pending_mean_sum += mean_occupancy
+        self._pending_episodes += 1
+
+        self._episode_occ.clear()
         self._episode_id += 1
 
-        return mean_occ
-
-    def log_step_metric(self, value: float, step: int) -> None:
-        """Log a single scalar (e.g. mean episode occupancy) against `step`
-        (typically `num_timesteps`), so train/val curves are directly
-        comparable in the MLflow UI.
-        """
-        if self.log_to_mlflow:
-            mlflow.log_metric(f"occupancy/by_training_timesteps/{self.split}", value, step=step)
-
-    def finalize_training(self) -> None:
-        # Closes the latest episode if there is one still in progress
-        if self._episode_occ:
-            self.end_episode()
-
-        day_occ_sum, day_occ_count = self._day_occ_sum, self._day_occ_count
-        if not self.log_to_mlflow or day_occ_sum is None or day_occ_count is None:
+    def log_step_metrics(self, step: int) -> None:
+        if self._pending_episodes == 0:
             return
 
-        # Calculates the avg occupancy taking into account all episodes and send this data to MLflow
-        for day in range(len(day_occ_sum)):
+        mean_occupancy = self._pending_mean_sum / self._pending_episodes
+
+        if self.log_to_mlflow:
             mlflow.log_metric(
-                f"occupancy/by_day/{self.split}",
-                float(day_occ_sum[day] / day_occ_count[day]),
-                step=day,
+                f"occupancy_pct/by_training_timesteps/{self.split}",
+                float(mean_occupancy),
+                step=step,
+            )
+
+        self._pending_mean_sum = 0.0
+        self._pending_episodes = 0
+
+    def finalize_training(self) -> None:
+        # Non includiamo l'episodio parziale nelle medie.
+        self._episode_occ.clear()
+        self._pending_mean_sum = 0.0
+        self._pending_episodes = 0
+
+        if not self.log_to_mlflow or self._completed_episodes == 0:
+            return
+
+        assert self._day_occ_sum is not None
+
+        for day_index, total in enumerate(self._day_occ_sum):
+            mlflow.log_metric(
+                (f"occupancy_pct/by_stay_day/mean_completed_episodes/{self.split}"),
+                float(total / self._completed_episodes),
+                step=day_index + 1,
             )

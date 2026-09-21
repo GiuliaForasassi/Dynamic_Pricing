@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+import mlflow
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.plots.acceptance_rate_tracker import AcceptanceRateTracker
+from pricing_advertising.plots.eval_artifact_plots import log_eval_artifact_plots
 from pricing_advertising.plots.occupancy_tracker import OccupancyTracker
 from pricing_advertising.plots.price_tracker import PriceTracker
 from pricing_advertising.plots.request_tracker import RequestTracker
@@ -67,7 +69,6 @@ class PlotCallback(BaseCallback):
             split="train", log_to_mlflow=self.log_to_mlflow
         )
         self._num_rooms_cache: dict[int, list[int]] = {}
-        self._price_tracker_initialized = False
 
     # ========== HELPER FUNCTIONS FOR SubprocVecEnv ==========
 
@@ -98,74 +99,58 @@ class PlotCallback(BaseCallback):
         if env_idx < 0 or env_idx >= n_envs:
             return True
 
-        # Initialize price tracker on first step
-        if not self._price_tracker_initialized:
-            start_sim = self._get_attr("start_simulation", env_idx)
-            end_sim = self._get_attr("end_simulation", env_idx)
-            simulation_days = int((end_sim - start_sim).days)
-            self._price_tracker.set_simulation_params(start_sim, simulation_days)
-            self._price_tracker_initialized = True
+        metrics = self.locals["infos"][env_idx]["step_metrics"]
 
-        # ---- Retrieve simulation state ----
-        # Note: env increments `today` at the end of step(), so `today` is already the next day
-        # We need to track metrics for the day that just completed (today - 1 day)
-        today = self._get_attr("today", env_idx)
-        start_sim = self._get_attr("start_simulation", env_idx)
-        completed_day_index = int((today - start_sim).days) - 1
+        self._occupancy_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            occupancy_pct=float(metrics["occupancy_pct"]),
+        )
+        self._request_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            num_requests=int(metrics["num_requests"]),
+            request_stays=metrics["request_stays"],
+        )
+        self._reward_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            reward=float(metrics["reward"]),
+        )
 
-        num_rooms = self._get_num_rooms_by_cat(env_idx)
-        occupancy = self._get_attr("occupancy", env_idx)
-        occ_pct = _compute_overall_occupancy_pct(occupancy, completed_day_index, num_rooms)
-        self._occupancy_tracker.record_day(occ_pct)
+        self._price_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            start_simulation=metrics["start_simulation"],
+            simulation_days=int(metrics["simulation_days"]),
+            confirmed_requests=metrics["confirmed_requests"],
+            confirmed_nightly_prices=metrics["confirmed_nightly_prices"],
+        )
 
-        # ---- Record request metrics ----
-        request_generator = self._get_attr("request_generator", env_idx)
-        requests = request_generator.fetch_requests_for_date(today)
-        num_requests, t_reservation_mean = _compute_request_metrics(requests, start_sim)
-        self._request_tracker.record_day(num_requests, t_reservation_mean)
-
-        # ---- Record reward metrics ----
-        rewards = self.locals.get("rewards")
-        if rewards is not None and env_idx < len(rewards):
-            reward = float(rewards[env_idx])
-            self._reward_tracker.record_day(reward)
-
-        # ---- Record price metrics ----
-        final_requests = self._get_attr("last_final_requests", env_idx)
-        final_prices = self._get_attr("last_final_prices", env_idx)
-        self._price_tracker.record_request_prices(final_requests, final_prices)
-
-        # ---- Record acceptance rate metrics ----
-        accepted_by_day = self._get_attr("accepted_by_day", env_idx)
-        rejected_by_day = self._get_attr("rejected_by_day", env_idx)
-        total_accepted = float(accepted_by_day[:, completed_day_index].sum())
-        total_rejected = float(rejected_by_day[:, completed_day_index].sum())
-        if total_accepted + total_rejected > 0:
-            acceptance_rate = total_accepted / (total_accepted + total_rejected)
-            self._acceptance_rate_tracker.record_day(acceptance_rate)
-
+        self._acceptance_rate_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            num_requests=int(metrics["num_requests"]),
+            num_offers=int(metrics["num_offers"]),
+            num_price_accepted=int(metrics["num_price_accepted"]),
+            num_confirmed=int(metrics["num_confirmed"]),
+        )
         # ---- end episode detection ----
         dones = self.locals.get("dones")
         if dones is not None and dones[env_idx].item():
-            mean_occ = self._occupancy_tracker.end_episode()
-            if mean_occ is not None:
-                self._occupancy_tracker.log_step_metric(float(mean_occ), step=self.num_timesteps)
+            self._occupancy_tracker.end_episode()
+            self._occupancy_tracker.log_step_metrics(step=self.num_timesteps)
 
             self._request_tracker.end_episode()
+            self._request_tracker.log_step_metrics(step=self.num_timesteps)
 
-            mean_reward = self._reward_tracker.end_episode()
-            if mean_reward is not None:
-                self._reward_tracker.log_step_metric(float(mean_reward), step=self.num_timesteps)
+            self._reward_tracker.end_episode()
+            self._reward_tracker.log_step_metrics(step=self.num_timesteps)
 
-            mean_price = self._price_tracker.end_episode()
-            if mean_price is not None:
-                self._price_tracker.log_step_metric(float(mean_price), step=self.num_timesteps)
+            self._price_tracker.end_episode()
+            self._price_tracker.log_step_metrics(step=self.num_timesteps)
 
-            mean_acceptance_rate = self._acceptance_rate_tracker.end_episode()
-            if mean_acceptance_rate is not None:
-                self._acceptance_rate_tracker.log_step_metric(
-                    float(mean_acceptance_rate), step=self.num_timesteps
-                )
+            self._acceptance_rate_tracker.end_episode()
+            self._acceptance_rate_tracker.log_step_metrics(step=self.num_timesteps)
 
         return True
 
@@ -206,6 +191,7 @@ class EvalOccupancyCallback(EvalCallback):
             verbose=verbose,
             warn=warn,
         )
+
         self.log_to_mlflow = log_to_mlflow
 
         self._occupancy_tracker = OccupancyTracker(split="val", log_to_mlflow=self.log_to_mlflow)
@@ -216,14 +202,10 @@ class EvalOccupancyCallback(EvalCallback):
             split="val", log_to_mlflow=self.log_to_mlflow
         )
         self._num_rooms_cache: dict[int, list[int]] = {}
-        self._price_tracker_initialized = False
-        # Per-episode means collected during the eval round currently in progress.
-        self._round_occ_means: list[float] = []
-        self._round_num_requests_means: list[float] = []
-        self._round_t_reservation_means: list[float] = []
-        self._round_reward_means: list[float] = []
-        self._round_price_means: list[float] = []
-        self._round_acceptance_rate_means: list[float] = []
+
+        self._artifact_checkpoint: int | None = None
+        self._artifact_episode_ids: dict[int, int] = {}
+        self._artifact_episode_steps: dict[int, list[dict[str, Any]]] = {}
 
     def _get_num_rooms_by_cat(self, env: Any, idx: int) -> list[int]:  # noqa: ANN401
         if idx in self._num_rooms_cache:
@@ -240,71 +222,55 @@ class EvalOccupancyCallback(EvalCallback):
     def _log_success_callback(self, locals_: dict[str, Any], globals_: dict[str, Any]) -> None:
         super()._log_success_callback(locals_, globals_)
 
-        env = locals_["env"]
-        env_idx = int(locals_["i"])
+        # Raccoglie i dati dello step della vera evaluation.
+        self._record_eval_artifact_step(locals_)
 
-        # Initialize price tracker on first step
-        if not self._price_tracker_initialized:
-            start_sim = env.get_attr("start_simulation", indices=env_idx)[0]
-            end_sim = env.get_attr("end_simulation", indices=env_idx)[0]
-            simulation_days = int((end_sim - start_sim).days)
-            self._price_tracker.set_simulation_params(start_sim, simulation_days)
-            self._price_tracker_initialized = True
+        metrics = locals_["info"]["step_metrics"]
 
-        # ---- Retrieve simulation state ----
-        # Note: env increments `today` at the end of step(), so `today` is already the next day
-        # We need to track metrics for the day that just completed (today - 1 day)
-        today = env.get_attr("today", indices=env_idx)[0]
-        start_sim = env.get_attr("start_simulation", indices=env_idx)[0]
-        completed_day_index = int((today - start_sim).days) - 1
+        self._occupancy_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            occupancy_pct=float(metrics["occupancy_pct"]),
+        )
+        self._request_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            num_requests=int(metrics["num_requests"]),
+            request_stays=metrics["request_stays"],
+        )
+        self._reward_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            reward=float(metrics["reward"]),
+        )
 
-        num_rooms = self._get_num_rooms_by_cat(env, env_idx)
-        occupancy = env.get_attr("occupancy", indices=env_idx)[0]
-        occ_pct = _compute_overall_occupancy_pct(occupancy, completed_day_index, num_rooms)
-        self._occupancy_tracker.record_day(occ_pct)
+        self._price_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            start_simulation=metrics["start_simulation"],
+            simulation_days=int(metrics["simulation_days"]),
+            confirmed_requests=metrics["confirmed_requests"],
+            confirmed_nightly_prices=metrics["confirmed_nightly_prices"],
+        )
 
-        # ---- Record request metrics ----
-        request_generator = env.get_attr("request_generator", indices=env_idx)[0]  # TODO slow
-        requests = request_generator.fetch_requests_for_date(today)
-        num_requests, t_reservation_mean = _compute_request_metrics(requests, start_sim)
-        self._request_tracker.record_day(num_requests, t_reservation_mean)
-
-        # ---- Record reward metrics ----
-        reward = locals_.get("reward", 0.0)
-        self._reward_tracker.record_day(float(reward))
-
-        # ---- Record price metrics ----
-        final_requests = env.get_attr("last_final_requests", indices=env_idx)[0]
-        final_prices = env.get_attr("last_final_prices", indices=env_idx)[0]
-        self._price_tracker.record_request_prices(final_requests, final_prices)
-
-        # ---- Record acceptance rate metrics ----
-        accepted_by_day = env.get_attr("accepted_by_day", indices=env_idx)[0]
-        rejected_by_day = env.get_attr("rejected_by_day", indices=env_idx)[0]
-        total_accepted = float(accepted_by_day[:, completed_day_index].sum())
-        total_rejected = float(rejected_by_day[:, completed_day_index].sum())
-        if total_accepted + total_rejected > 0:
-            acceptance_rate = total_accepted / (total_accepted + total_rejected)
-            self._acceptance_rate_tracker.record_day(acceptance_rate)
+        self._acceptance_rate_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            num_requests=int(metrics["num_requests"]),
+            num_offers=int(metrics["num_offers"]),
+            num_price_accepted=int(metrics["num_price_accepted"]),
+            num_confirmed=int(metrics["num_confirmed"]),
+        )
 
         if bool(locals_["done"]):
-            mean_occ = self._occupancy_tracker.end_episode()
-            if mean_occ is not None:
-                self._round_occ_means.append(mean_occ)
+            self._occupancy_tracker.end_episode()
 
             self._request_tracker.end_episode()
 
-            mean_reward = self._reward_tracker.end_episode()
-            if mean_reward is not None:
-                self._round_reward_means.append(mean_reward)
+            self._reward_tracker.end_episode()
 
-            mean_price = self._price_tracker.end_episode()
-            if mean_price is not None:
-                self._round_price_means.append(mean_price)
+            self._price_tracker.end_episode()
 
-            mean_acceptance_rate = self._acceptance_rate_tracker.end_episode()
-            if mean_acceptance_rate is not None:
-                self._round_acceptance_rate_means.append(mean_acceptance_rate)
+            self._acceptance_rate_tracker.end_episode()
 
     # Fires once per eval round (every `eval_freq` training steps): SB3's
     # EvalCallback._on_step() only calls evaluate_policy() (which drives
@@ -312,29 +278,12 @@ class EvalOccupancyCallback(EvalCallback):
     # has content right after a round completes.
     def _on_step(self) -> bool:
         continue_training = super()._on_step()
-        if self._round_occ_means:
-            self._occupancy_tracker.log_step_metric(
-                float(np.mean(self._round_occ_means)), step=self.num_timesteps
-            )
-            self._round_occ_means = []
 
-        if self._round_reward_means:
-            self._reward_tracker.log_step_metric(
-                float(np.mean(self._round_reward_means)), step=self.num_timesteps
-            )
-            self._round_reward_means = []
-
-        if self._round_price_means:
-            self._price_tracker.log_step_metric(
-                float(np.mean(self._round_price_means)), step=self.num_timesteps
-            )
-            self._round_price_means = []
-
-        if self._round_acceptance_rate_means:
-            self._acceptance_rate_tracker.log_step_metric(
-                float(np.mean(self._round_acceptance_rate_means)), step=self.num_timesteps
-            )
-            self._round_acceptance_rate_means = []
+        self._request_tracker.log_step_metrics(step=self.num_timesteps)
+        self._acceptance_rate_tracker.log_step_metrics(step=self.num_timesteps)
+        self._reward_tracker.log_step_metrics(step=self.num_timesteps)
+        self._occupancy_tracker.log_step_metrics(step=self.num_timesteps)
+        self._price_tracker.log_step_metrics(step=self.num_timesteps)
 
         return continue_training
 
@@ -345,3 +294,67 @@ class EvalOccupancyCallback(EvalCallback):
         self._reward_tracker.finalize_training()
         self._price_tracker.finalize_training()
         self._acceptance_rate_tracker.finalize_training()
+
+    def _record_eval_artifact_step(
+        self,
+        locals_: dict[str, Any],
+    ) -> None:
+        if not self.log_to_mlflow:
+            return
+
+        checkpoint = int(self.num_timesteps)
+        env_idx = int(locals_["i"])
+
+        # Durante una evaluation num_timesteps resta fisso:
+        # identifica il checkpoint del modello valutato.
+        if checkpoint != self._artifact_checkpoint:
+            if any(self._artifact_episode_steps.values()):
+                raise RuntimeError("Cambio di checkpoint con dati di evaluation non chiusi.")
+
+            self._artifact_checkpoint = checkpoint
+            self._artifact_episode_ids.clear()
+            self._artifact_episode_steps.clear()
+
+        payload = locals_["info"].get("eval_artifacts")
+        if payload is None:
+            raise RuntimeError(
+                "Dati eval_artifacts mancanti: controllare la configurazione "
+                "dell'ambiente di evaluation."
+            )
+
+        steps = self._artifact_episode_steps.setdefault(env_idx, [])
+        steps.append(payload)
+
+        # Lo step terminale viene aggiunto PRIMA del salvataggio.
+        if not bool(locals_["done"]):
+            return
+
+        episode_id = self._artifact_episode_ids.get(env_idx, 0)
+
+        snapshot_dates = self.eval_env.get_attr(
+            "artifact_snapshot_dates",
+            indices=env_idx,
+        )[0]
+
+        artifact = {
+            "schema_version": 3,
+            "decision_end_inclusive": True,
+            "checkpoint_timesteps": checkpoint,
+            "env_index": env_idx,
+            "episode_id": episode_id,
+            "snapshot_dates": sorted(value.isoformat() for value in snapshot_dates),
+            "steps": steps,
+        }
+
+        mlflow.log_dict(
+            artifact,
+            (
+                f"eval_data/{checkpoint:08d}_timesteps/"
+                f"env_{env_idx:02d}/episode_{episode_id:05d}.json"
+            ),
+        )
+
+        log_eval_artifact_plots(artifact)
+
+        self._artifact_episode_steps[env_idx] = []
+        self._artifact_episode_ids[env_idx] = episode_id + 1

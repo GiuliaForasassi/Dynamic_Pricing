@@ -1,106 +1,155 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import mlflow
-import numpy as np
+
+
+@dataclass(frozen=True)
+class AcceptanceCounts:
+    requests: int = 0
+    offers: int = 0
+    price_accepted: int = 0
+    confirmed: int = 0
+
+    def __post_init__(self) -> None:
+        if not (0 <= self.confirmed <= self.price_accepted <= self.offers <= self.requests):
+            raise ValueError("Conteggi di acceptance incoerenti.")
+
+    def __add__(self, other: AcceptanceCounts) -> AcceptanceCounts:
+        return AcceptanceCounts(
+            requests=self.requests + other.requests,
+            offers=self.offers + other.offers,
+            price_accepted=self.price_accepted + other.price_accepted,
+            confirmed=self.confirmed + other.confirmed,
+        )
+
+    def rates(self) -> dict[str, float]:
+        return {
+            "confirmation_rate": (
+                self.confirmed / self.requests if self.requests > 0 else float("nan")
+            ),
+            "price_acceptance_rate": (
+                self.price_accepted / self.offers if self.offers > 0 else float("nan")
+            ),
+        }
 
 
 class AcceptanceRateTracker:
-    """Accumulates per-day acceptance rate and logs it to mlflow, per training split.
+    """Tassi per giorno di richiesta e per timestep di training.
 
-    Two metrics are produced (keys suffixed with `split`, e.g. "train"/"val"):
-      - "acceptance_rate/by_training_timestep/{split}": mean acceptance rate over an episode
-        (or, for eval, over a whole eval round), logged against a caller-supplied `step`
-        (typically `num_timesteps`), so train/val curves share the same x-axis and can be
-        overlaid/compared in the MLflow UI. See `end_episode`/`log_step_metric`.
-      - "acceptance_rate/by_reservation_day/{split}": one point per simulation day (0-365),
-        averaged across all episodes seen so far, logged once `finalize_training` is
-        called (i.e. at the end of training).
+    I riepiloghi includono soltanto episodi completi.
 
-    Acceptance rate is calculated as: accepted_count / (accepted_count + rejected_count)
-    for each day, aggregated across all room categories.
+    - by_training_timesteps:
+      rapporto dei conteggi degli episodi completati dall'ultimo log.
+      Training: un episodio. Evaluation: un intero round.
+
+    - by_request_day_pooled_completed_episodes:
+      rapporto dei conteggi per ciascun giorno, aggregati su tutti gli
+      episodi completi registrati durante la run, anche di checkpoint diversi.
     """
 
     def __init__(self, split: str, log_to_mlflow: bool = True) -> None:
-        self.split = split  # train or val
+        self.split = split
         self.log_to_mlflow = log_to_mlflow
 
-        self._episode_id: int = 0
-        self._episode_acceptance_rate: list[float] = []
+        self._episode: list[AcceptanceCounts] = []
+        self._expected_days: int | None = None
 
-        self._day_acceptance_rate_sum: np.ndarray | None = None
-        self._day_acceptance_rate_count: np.ndarray | None = None
+        self._by_day: dict[int, AcceptanceCounts] = {}
+        self._pending_counts: AcceptanceCounts | None = None
 
-    def record_day(self, acceptance_rate: float) -> None:
-        """Record acceptance rate for a single day.
+    def record_day(
+        self,
+        *,
+        day_index: int,
+        simulation_days: int,
+        num_requests: int,
+        num_offers: int,
+        num_price_accepted: int,
+        num_confirmed: int,
+    ) -> None:
+        if simulation_days <= 0:
+            raise ValueError("La durata dell'episodio deve essere positiva.")
 
-        Args:
-            acceptance_rate: Acceptance rate (0.0 to 1.0) for this day.
-        """
-        self._episode_acceptance_rate.append(float(acceptance_rate))
+        if self._expected_days is None:
+            self._expected_days = simulation_days
+        elif simulation_days != self._expected_days:
+            raise ValueError("Durata cambiata durante l'episodio.")
 
-    def end_episode(self) -> float | None:
-        """Flush the current episode: accumulate per-day values into running averages,
-        and return the episode's mean acceptance rate (or None if no data was recorded).
-        """
-        if not self._episode_acceptance_rate:
+        # Ogni giorno va registrato, anche con tutti i conteggi a zero.
+        if day_index != len(self._episode) or day_index >= simulation_days:
+            raise ValueError("Giorno mancante, duplicato o fuori sequenza.")
+
+        self._episode.append(
+            AcceptanceCounts(
+                requests=num_requests,
+                offers=num_offers,
+                price_accepted=num_price_accepted,
+                confirmed=num_confirmed,
+            )
+        )
+
+    def end_episode(self) -> AcceptanceCounts | None:
+        if not self._episode:
             return None
 
-        episode_rates = np.asarray(self._episode_acceptance_rate, dtype=float)
-        mean_rate = float(episode_rates.mean())
+        if len(self._episode) != self._expected_days:
+            raise ValueError("Impossibile chiudere un episodio incompleto.")
 
-        # Accumulate into across-episode statistics
-        if self._day_acceptance_rate_sum is None or self._day_acceptance_rate_count is None:
-            self._day_acceptance_rate_sum = np.zeros_like(episode_rates, dtype=float)
-            self._day_acceptance_rate_count = np.zeros_like(episode_rates, dtype=int)
-        # If episodes have different durations we use padding
-        if self._day_acceptance_rate_sum.shape != episode_rates.shape:
-            padding = np.zeros(len(self._day_acceptance_rate_sum) - len(episode_rates))
-            counts_considering_padding = np.concatenate(
-                [np.ones_like(episode_rates), np.zeros_like(padding)]
-            ).astype(np.int64)
-            episode_rates = np.concatenate([episode_rates, padding])
-            self._day_acceptance_rate_count += counts_considering_padding
+        totals = AcceptanceCounts()
+
+        for day_index, counts in enumerate(self._episode):
+            totals = totals + counts
+            self._by_day[day_index] = self._by_day.get(day_index, AcceptanceCounts()) + counts
+
+        if self._pending_counts is None:
+            self._pending_counts = totals
         else:
-            self._day_acceptance_rate_count += 1
-        self._day_acceptance_rate_sum += episode_rates
+            self._pending_counts = self._pending_counts + totals
 
-        self._episode_acceptance_rate = []
-        self._episode_id += 1
+        self._episode = []
+        self._expected_days = None
+        return totals
 
-        return mean_rate
-
-    def log_step_metric(self, value: float, step: int) -> None:
-        """Log a single scalar (e.g. mean episode acceptance rate) against `step`
-        (typically `num_timesteps`), so train/val curves are directly
-        comparable in the MLflow UI.
-        """
-        if self.log_to_mlflow:
-            mlflow.log_metric(
-                f"acceptance_rate/by_training_timestep/{self.split}", value, step=step
-            )
-
-    def finalize_training(self) -> None:
-        """Finalize training: flush any remaining episode data and log per-day
-        averages to mlflow.
-        """
-        # Closes the latest episode if there is one still in progress
-        if self._episode_acceptance_rate:
-            self.end_episode()
-
-        if (
-            not self.log_to_mlflow
-            or self._day_acceptance_rate_sum is None
-            or self._day_acceptance_rate_count is None
-        ):
+    def _log_rates(
+        self,
+        counts: AcceptanceCounts,
+        *,
+        axis: str,
+        step: int,
+    ) -> None:
+        if not self.log_to_mlflow:
             return
 
-        # Calculates the avg acceptance rate taking into account all episodes and send this data to MLflow
-        for day in range(len(self._day_acceptance_rate_sum)):
-            if self._day_acceptance_rate_count[day] > 0:
-                mlflow.log_metric(
-                    f"acceptance_rate/by_reservation_day/{self.split}",
-                    float(
-                        self._day_acceptance_rate_sum[day] / self._day_acceptance_rate_count[day]
-                    ),
-                    step=day,
-                )
+        for name, value in counts.rates().items():
+            mlflow.log_metric(
+                f"{name}/{axis}/{self.split}",
+                value,
+                step=step,
+            )
+
+    def log_step_metrics(self, step: int) -> None:
+        """Logga e svuota i conteggi degli episodi completi in attesa."""
+        if self._pending_counts is None:
+            return
+
+        self._log_rates(
+            self._pending_counts,
+            axis="by_training_timesteps",
+            step=step,
+        )
+        self._pending_counts = None
+
+    def finalize_training(self) -> None:
+        # Un episodio interrotto dalla fine del training non entra
+        # nei riepiloghi degli episodi completi.
+        self._episode = []
+        self._expected_days = None
+
+        for day_index, counts in sorted(self._by_day.items()):
+            self._log_rates(
+                counts,
+                axis="by_request_day_pooled_completed_episodes",
+                step=day_index + 1,
+            )

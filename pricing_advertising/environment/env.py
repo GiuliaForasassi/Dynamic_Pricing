@@ -44,6 +44,8 @@ class PricingEnv(gym.Env):
         request_generator: RequestGenerator | None = None,
         acceptance_model: ABCAcceptanceModel | None = None,
         seed: int | None = None,
+        collect_eval_artifacts: bool = False,
+        artifact_snapshot_dates: list[date] | None = None,
     ) -> None:
         if start_simulation > end_simulation:
             raise ValueError(
@@ -60,14 +62,20 @@ class PricingEnv(gym.Env):
         # ============ SIMULATION HORIZON AND HOTEL ============
         self.start_simulation = start_simulation
         self.end_simulation = end_simulation
-        self.window_span_days = NUM_WINDOWS * WINDOW_SIZE
-        self.extended_end_simulation = end_simulation + timedelta(days=self.window_span_days)
+        self.total_days = (end_simulation - start_simulation).days + 1
 
-        self.total_days = (end_simulation - start_simulation).days
+        self.window_span_days = NUM_WINDOWS * WINDOW_SIZE
         self.extended_simulation_days = self.total_days + self.window_span_days
+
+        self.extended_end_simulation = start_simulation + timedelta(
+            days=self.extended_simulation_days
+        )
 
         self.hotel = hotel
         self.num_room_categories = len(RoomCategory)
+
+        self.collect_eval_artifacts = collect_eval_artifacts
+        self.artifact_snapshot_dates = set(artifact_snapshot_dates or [])
 
         # ============ STATE VARIABLES ============
         self.today = start_simulation
@@ -118,15 +126,18 @@ class PricingEnv(gym.Env):
         )
 
         # =========== REQUEST GENERATOR AND ACCEPTANCE MODEL ===========
-        # TODO: numero fisso di avg_num_requests
-        self.avg_num_requests = avg_num_requests or random.randint(
-            MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS
+        # Se configurata, la domanda media viene usata senza estrazioni.
+        # Altrimenti l'estrazione usa il generatore locale, inizializzato col seed.
+        self.avg_num_requests = (
+            self.py_rng.randint(MIN_AVG_NUM_REQUESTS, MAX_AVG_NUM_REQUESTS)
+            if avg_num_requests is None
+            else avg_num_requests
         )
 
         self.seasonality_array = np.array(
             [
                 self.get_seasonality(start_simulation + timedelta(days=day_idx))
-                for day_idx in range((self.extended_end_simulation - self.start_simulation).days)
+                for day_idx in range(self.extended_simulation_days)
             ]
         )
 
@@ -170,7 +181,7 @@ class PricingEnv(gym.Env):
 
     def get_observation(self) -> dict:
         current_day_index = (self.today - self.start_simulation).days
-        simulation_days = (self.end_simulation - self.start_simulation).days
+        simulation_days = self.total_days
 
         occupancy_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
         demand_windows = np.zeros((self.num_room_categories, NUM_WINDOWS), dtype=np.float32)
@@ -346,11 +357,145 @@ class PricingEnv(gym.Env):
         self.last_final_requests = final_requests
         self.last_final_prices = final_prices
 
+        info: dict[str, Any] = {}
+
+        # For logging metrics
+        # Dati dello step appena elaborato, prima dell'incremento
+        # della data e dell'eventuale reset automatico.
+        total_rooms = sum(
+            self.hotel.get_num_rooms_per_category(RoomCategory(c + 1))
+            for c in range(self.num_room_categories)
+        )
+        if total_rooms <= 0:
+            raise ValueError("La capacità totale dell'hotel deve essere positiva.")
+
+        # accepted_mask è relativo a valid_requests.
+        # occupancy_mask è relativo alle sole accepted_requests.
+        confirmed_valid_indices = np.flatnonzero(np.asarray(accepted_mask, dtype=bool))[
+            np.asarray(occupancy_mask, dtype=bool)
+        ]
+
+        # Ordine: richiesta confermata, poi notti di quella richiesta.
+        final_nightly_prices = np.asarray(
+            [
+                float(price)
+                for index in confirmed_valid_indices
+                for price in daily_prices[int(index)]
+            ],
+            dtype=float,
+        )
+
+        if len(final_nightly_prices) != sum(int(request.days_stay) for request in final_requests):
+            raise ValueError("Prezzi notturni non allineati alle richieste confermate.")
+
+        reservation_offsets = [
+            (request.t_reservation - self.start_simulation).days for request in requests
+        ]
+
+        info["step_metrics"] = {
+            "day": self.today,
+            "day_index": int(current_day_index),
+            "start_simulation": self.start_simulation,
+            "simulation_days": self.total_days,
+            "occupancy_pct": (
+                float(self.occupancy[:, current_day_index].sum()) / total_rooms * 100.0
+            ),
+            "num_requests": len(requests),
+            # Tutte le richieste, non soltanto quelle confermate.
+            # Ogni coppia contiene: indice del check-in, numero di notti.
+            "request_stays": [
+                (
+                    int((request.t_reservation - self.start_simulation).days),
+                    int(request.days_stay),
+                )
+                for request in requests
+            ],
+            # Manteniamo temporaneamente la convenzione del tracker attuale.
+            "mean_check_in_offset": (
+                float(np.mean(reservation_offsets)) if reservation_offsets else 0.0
+            ),
+            "reward": float(reward),
+            "num_offers": len(valid_requests),
+            "num_price_accepted": int(np.count_nonzero(accepted_mask)),
+            "num_confirmed": len(final_requests),
+            # Copie indipendenti dallo stato mutabile dell'ambiente.
+            "confirmed_requests": deepcopy(final_requests),
+            "confirmed_nightly_prices": final_nightly_prices,
+        }
+
+        # For plottings artifacts
+        if self.collect_eval_artifacts:
+            request_rows = []
+
+            for request_id, request in enumerate(requests):
+                row = self._request_to_artifact(request)
+                row.update(
+                    {
+                        "request_id": request_id,
+                        "valid": False,
+                        "price_accepted": False,
+                        "confirmed": False,
+                        "daily_prices": None,
+                    }
+                )
+                request_rows.append(row)
+            valid_positions = np.flatnonzero(np.asarray(valid_mask, dtype=bool))
+            confirmed_mask = np.zeros(len(valid_requests), dtype=bool)
+            confirmed_mask[np.flatnonzero(accepted_mask)] = np.asarray(occupancy_mask, dtype=bool)
+
+            for position, prices, price_accepted, confirmed in zip(
+                valid_positions,
+                daily_prices,
+                accepted_mask,
+                confirmed_mask,
+                strict=True,
+            ):
+                request_rows[int(position)].update(
+                    {
+                        "valid": True,
+                        "price_accepted": bool(price_accepted),
+                        "confirmed": bool(confirmed),
+                        "daily_prices": [float(price) for price in prices],
+                    }
+                )
+
+            payload: dict[str, Any] = {
+                "request_day": self.today.isoformat(),
+                "day_index": int((self.today - self.start_simulation).days),
+                "start_simulation": self.start_simulation.isoformat(),
+                "end_simulation": self.end_simulation.isoformat(),
+                "step_reward": float(reward),
+                "requests": request_rows,
+            }
+
+            if self.today in self.artifact_snapshot_dates:
+                start = (self.today - self.start_simulation).days
+                stop = (self.end_simulation - self.start_simulation).days + 1
+
+                levels = self.bar_levels[:, start:stop]
+
+                payload["snapshot_start_day"] = self.today.isoformat()
+                payload["occupancy_by_category"] = self.occupancy[:, start:stop].tolist()
+                payload["bar_levels_by_category"] = levels.tolist()
+
+                # Salviamo direttamente le tariffe: i grafici non dipenderanno
+                # dalla tabella BAR caricata quando verranno rigenerati.
+                payload["bar_prices_by_category"] = [
+                    [float(get_price(RoomCategory(c + 1).name, int(level))) for level in levels[c]]
+                    for c in range(self.num_room_categories)
+                ]
+
+                payload["rooms_by_category"] = [
+                    int(self.hotel.get_num_rooms_per_category(RoomCategory(c + 1)))
+                    for c in range(self.num_room_categories)
+                ]
+
+            info["eval_artifacts"] = payload
+
         # Move to the next day
         self.today += timedelta(days=1)
-        terminated = self.today >= self.end_simulation
+        terminated = self.today > self.end_simulation
         observation = self.get_observation()
-        info: dict = {}  # Placeholder for additional info
 
         # times["t6"] = perf_counter()
 
@@ -794,6 +939,17 @@ class PricingEnv(gym.Env):
     # ========== HELPER FOR DOING PLOTS ==========
     def get_num_rooms_per_category(self, category: RoomCategory) -> int:
         return self.hotel.get_num_rooms_per_category(category)
+
+    # To serialize a request without having a mutable reference
+    @staticmethod
+    def _request_to_artifact(request: Request) -> dict[str, Any]:
+        return {
+            "request_date": request.t_request.isoformat(),
+            "check_in": request.t_reservation.isoformat(),
+            "days_stay": int(request.days_stay),
+            "category": int(request.category.value),
+            "num_guests": int(request.num_guests),
+        }
 
 
 if __name__ == "__main__":

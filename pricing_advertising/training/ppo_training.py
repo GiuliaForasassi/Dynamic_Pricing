@@ -1,15 +1,16 @@
 import gc
 import sys
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
+import gymnasium as gym
 import mlflow
 import numpy as np
 from loguru import logger
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CallbackList
-from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import HumanOutputFormat, Logger
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
@@ -18,12 +19,7 @@ import pricing_advertising.environment.__init__  # noqa: F401
 
 # your imports
 from pricing_advertising.hotel.hotel import Hotel
-from pricing_advertising.plots.acceptance_plot_callback import AcceptancePlotCallback
-from pricing_advertising.plots.bar_level_acceptance_callback import AcceptanceByBarLevelCallback
 from pricing_advertising.plots.plot_callback import EvalOccupancyCallback, PlotCallback
-from pricing_advertising.plots.price_plot_callback import PricePlotCallback
-from pricing_advertising.plots.request_plot_callback import RequestPlotCallback
-from pricing_advertising.plots.reward_plot_callback import RewardPlotCallback
 from pricing_advertising.utils.constants import SEEDS
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
@@ -53,7 +49,29 @@ def run_simulation(
     # ======= OPTIONAL PARAMETERS =======
     eval_frequency: int,
     price_plot_request_dates: list[tuple[int, int, int]] | None = None,
+    avg_num_requests: int = 250,
+    eval_seed: int | None = None,
 ) -> float:
+    # ============ SEED CHOISE ============
+    if n_envs <= 0:
+        raise ValueError("n_envs deve essere positivo.")
+    if avg_num_requests <= 0:
+        raise ValueError("avg_num_requests deve essere positivo.")
+
+    # Un calendario di richieste distinto per ogni ambiente di training.
+    train_request_seeds = [seed + index for index in range(n_envs)]
+
+    # Per default usiamo il primo seed successivo a quelli del training.
+    if eval_seed is None:
+        eval_seed = seed + n_envs
+
+    if eval_seed in train_request_seeds:
+        raise ValueError("Il seed di validation deve essere distinto da quelli del training.")
+
+    # Compatibilità con i generatori e le librerie che usano seed a 32 bit.
+    if any(value < 0 or value >= 2**32 for value in [*train_request_seeds, eval_seed]):
+        raise ValueError("I seed devono appartenere all'intervallo [0, 2**32).")
+
     # ============ MLFLOW SETUP ============
     mlflow.set_experiment("PricingEnv_Simulation")
     with mlflow.start_run(run_name="PPO_training"):
@@ -75,6 +93,10 @@ def run_simulation(
                 "num_category1_rooms": num_category1_rooms,
                 "num_category2_rooms": num_category2_rooms,
                 "num_category3_rooms": num_category3_rooms,
+                "avg_num_requests": avg_num_requests,
+                "train_request_seeds": str(train_request_seeds),
+                "eval_request_seed": eval_seed,
+                "request_scenario_mode": "fixed_per_environment",
             }
         )
 
@@ -92,35 +114,52 @@ def run_simulation(
         )
 
         env_kwargs: dict[str, Any] = dict(
-            seed=seed,
             start_simulation=start_simulation,
             end_simulation=end_simulation,
             hotel=hotel,
+            avg_num_requests=avg_num_requests,
         )
 
-        # da passare a PPO
-        vec_env = make_vec_env(
-            "PricingEnv-v0",
-            n_envs=n_envs,
-            env_kwargs=env_kwargs,
-            # vec_env_cls=DummyVecEnv,
-            vec_env_cls=SubprocVecEnv,
-            vec_env_kwargs={"start_method": "fork"},
-        )
-        # use Moniotr/VecMonitor to ensure that EvalCallback logs correctly
-        vec_env = VecMonitor(vec_env)
+        # Il seed va passato al COSTRUTTORE:
+        # le richieste vengono pregenerate durante __init__.
+        train_factories = [
+            partial(
+                gym.make,
+                "PricingEnv-v0",
+                seed=request_seed,
+                **env_kwargs,
+            )
+            for request_seed in train_request_seeds
+        ]
 
-        # da passare a eval_callback
-        eval_env = make_vec_env(
-            "PricingEnv-v0",
-            n_envs=1,
-            env_kwargs=env_kwargs,
-            # vec_env_cls=DummyVecEnv,
-            vec_env_cls=SubprocVecEnv,
-            vec_env_kwargs={"start_method": "fork"},
+        vec_env = VecMonitor(
+            SubprocVecEnv(
+                train_factories,
+                start_method="fork",
+            )
         )
+        vec_env.seed(seed)
 
-        eval_env = VecMonitor(eval_env)
+        eval_env_kwargs = {
+            **env_kwargs,
+            "collect_eval_artifacts": True,
+            "artifact_snapshot_dates": [date(*value) for value in (price_plot_request_dates or [])],
+        }
+
+        eval_env = VecMonitor(
+            SubprocVecEnv(
+                [
+                    partial(
+                        gym.make,
+                        "PricingEnv-v0",
+                        seed=eval_seed,
+                        **eval_env_kwargs,
+                    )
+                ],
+                start_method="fork",
+            )
+        )
+        eval_env.seed(eval_seed)
 
         # ============ Model ============
         # PPO works into rollout of size = n_steps * n_envs
@@ -142,56 +181,6 @@ def run_simulation(
             track_env_idx=0,
         )
 
-        # ============ Price plot callback ============
-        price_plot_callback = PricePlotCallback(
-            eval_freq=eval_frequency,
-            n_envs=n_envs,
-            log_to_mlflow=True,
-            track_env_idx=0,
-        )
-        if price_plot_request_dates:
-            price_plot_callback.set_request_dates(price_plot_request_dates)
-
-        # ============ Acceptance plot callback ============
-        acceptance_plot_callback = AcceptancePlotCallback(
-            eval_freq=eval_frequency,
-            n_envs=n_envs,
-            log_to_mlflow=True,
-            track_env_idx=0,
-        )
-        if price_plot_request_dates:
-            acceptance_plot_callback.set_request_dates(price_plot_request_dates)
-
-        # ============ Reward plot callback ============
-        reward_plot_callback = RewardPlotCallback(
-            eval_freq=eval_frequency,
-            n_envs=n_envs,
-            log_to_mlflow=True,
-            track_env_idx=0,
-        )
-        if price_plot_request_dates:
-            reward_plot_callback.set_request_dates(price_plot_request_dates)
-
-        # ============ Request plot callback ============
-        request_plot_callback = RequestPlotCallback(
-            eval_freq=eval_frequency,
-            n_envs=n_envs,
-            log_to_mlflow=True,
-            track_env_idx=0,
-        )
-        if price_plot_request_dates:
-            request_plot_callback.set_request_dates(price_plot_request_dates)
-
-        # ============ Bar level acceptance plot callback ============
-        bar_level_acceptance_callback = AcceptanceByBarLevelCallback(
-            eval_freq=eval_frequency,
-            n_envs=n_envs,
-            log_to_mlflow=True,
-            track_env_idx=0,
-        )
-        if price_plot_request_dates:
-            bar_level_acceptance_callback.set_request_dates(price_plot_request_dates)
-
         # ============ Callback di valutazione ============
         eval_callback = EvalOccupancyCallback(
             eval_env,
@@ -208,11 +197,6 @@ def run_simulation(
         callback = CallbackList(
             [
                 plot_callback,
-                price_plot_callback,
-                acceptance_plot_callback,
-                reward_plot_callback,
-                request_plot_callback,
-                bar_level_acceptance_callback,
                 eval_callback,
             ]
         )

@@ -1940,7 +1940,6 @@ source = { editable = "." }
 dependencies = [
     { name = "gymnasium" },
     { name = "loguru" },
-    { name = "matplotlib" },
     { name = "mlflow" },
     { name = "optuna" },
     { name = "pydantic" },
@@ -1969,7 +1968,6 @@ dev = [
 requires-dist = [
     { name = "gymnasium", specifier = ">=1.0.0" },
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "mlflow", specifier = ">=2.21.2" },
     { name = "optuna", specifier = ">=4.2.1" },
     { name = "pydantic", specifier = ">=2.0.0" },

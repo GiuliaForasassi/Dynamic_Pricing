@@ -48,9 +48,15 @@ class RequestGenerator:
         # Check using differences in days (no operators < is on dates -> Pylance)
         delta_main = (end_simulation - start_simulation).days
         delta_extended = (extended_end_simulation - start_simulation).days
-        if delta_main <= 0 or delta_extended < 0:
+
+        if delta_main < 0 or delta_extended <= delta_main:
             raise ValueError(
-                "Must be valid: start_simulation < end_simulation < extendend_end_simulation"
+                "Must be valid: start_simulation <= end_simulation < extendend_end_simulation"
+            )
+
+        if len(seasonality_array) != delta_extended:
+            raise ValueError(
+                "seasonality_array must cover exactly[start_simulation, extended_end_simulation]."
             )
 
         self.seed = seed
@@ -100,7 +106,7 @@ class RequestGenerator:
     # ============ PRECOMPUTATION HELPERS ============
     def _pre_generate_all_requests(self) -> None:
         current = self.start_simulation
-        while current < self.end_simulation:  # t_request must be < end_simulation
+        while current <= self.end_simulation:
             num_requests = self._sample_num_requests(current)
             requests: list[Request] = []
             for _ in range(num_requests):

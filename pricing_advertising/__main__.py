@@ -15,10 +15,10 @@ if __name__ == "__main__":
     start_simulation = date(2025, 1, 1)
     end_simulation = date(2025, 12, 31)
     n_envs = 4
-    total_timesteps = 500000
+    total_timesteps = 1000
     n_steps = 500
 
-    episode_len = (end_simulation - start_simulation).days
+    episode_len = (end_simulation - start_simulation).days + 1
     rollout_size = n_steps * n_envs
     n_rollouts = math.ceil(total_timesteps / rollout_size)
     effective_timesteps = n_rollouts * rollout_size
@@ -38,8 +38,8 @@ if __name__ == "__main__":
         gamma=0.995,
         n_epochs=10,
         policy="MultiInputPolicy",
-        eval_episodes=1,
-        eval_frequency=20000,
+        eval_episodes=2,
+        eval_frequency=200,
         start_simulation=start_simulation,
         end_simulation=end_simulation,
         num_category1_rooms=100,
@@ -52,5 +52,7 @@ if __name__ == "__main__":
             (2025, 11, 12),
         ],
         seed=SEEDS[0],
+        avg_num_requests=250,
+        eval_seed=SEEDS[0] + 10_000,
     )
     print(f"Final eval mean reward: {final_mean_reward:.3f}")

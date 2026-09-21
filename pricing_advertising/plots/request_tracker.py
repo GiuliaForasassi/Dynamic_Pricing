@@ -8,150 +8,163 @@ import numpy as np
 
 
 class RequestTracker:
-    """Accumulates per-day request metrics and logs them to mlflow, per training split.
+    """Conteggi per giorno, mediati sui soli episodi completi della run.
 
-    Two metrics are produced (keys suffixed with `split`, e.g. "train"/"val"):
-      - "num_requests/by_request_day/{split}": one point per simulation day, averaged
-        across all episodes seen so far.
-      - "num_requests/by_reservation_day/{split}": one point per simulation day, averaged
-        across all episodes seen so far.
+    by_request_day:
+        richieste arrivate quel giorno, anche per soggiorni fuori
+        dall'intervallo visualizzato.
 
-    CSV artifacts are logged per episode for both metrics.
+    by_stay_day:
+        richieste che comprendono quella notte, ricevute durante
+        l'intero episodio, indipendentemente dall'esito.
+
+    Gli indici interni sono zero-based; CSV e metriche usano giorni 1-based.
     """
 
     def __init__(self, split: str, log_to_mlflow: bool = True) -> None:
         self.split = split
         self.log_to_mlflow = log_to_mlflow
 
-        self._episode_id: int = 0
-        self._episode_num_requests: list[int] = []
-        self._episode_t_reservation: list[float] = []
+        self._simulation_days: int | None = None
+        self._next_day = 0
+        self._episode_id = 0
+        self._completed_episodes = 0
+        self._pending_requests = 0
+        self._pending_episodes = 0
 
-        self._day_num_requests_sum: np.ndarray | None = None
-        self._day_num_requests_count: np.ndarray | None = None
-        self._day_t_reservation_sum: np.ndarray | None = None
-        self._day_t_reservation_count: np.ndarray | None = None
+        self._arrivals: np.ndarray | None = None
+        self._stays: np.ndarray | None = None
+        self._arrivals_sum: np.ndarray | None = None
+        self._stays_sum: np.ndarray | None = None
 
-    def record_day(self, num_requests: int, t_reservation_mean: float) -> None:
-        """Record request metrics for a single day.
+    def record_day(
+        self,
+        *,
+        day_index: int,
+        simulation_days: int,
+        num_requests: int,
+        request_stays: list[tuple[int, int]],
+    ) -> None:
+        if simulation_days <= 0:
+            raise ValueError("Durata della simulazione non positiva.")
 
-        Args:
-            num_requests: Number of requests presented on this day.
-            t_reservation_mean: Mean t_reservation (as ordinal day offset) of requests.
-        """
-        self._episode_num_requests.append(int(num_requests))
-        self._episode_t_reservation.append(float(t_reservation_mean))
+        if self._simulation_days is not None:
+            if simulation_days != self._simulation_days:
+                raise ValueError("Durata cambiata: usare un tracker separato.")
 
-    def end_episode(self) -> tuple[float | None, float | None]:
-        """Flush the current episode: write CSV artifacts, accumulate per-day
-        values into running averages, and return (mean_num_requests, mean_t_reservation)
-        or (None, None) if no data was recorded.
-        """
-        if not self._episode_num_requests or not self._episode_t_reservation:
-            return None, None
+        if day_index != self._next_day or day_index >= simulation_days:
+            raise ValueError("Giorno mancante, duplicato o fuori sequenza.")
 
-        episode_num_requests = np.asarray(self._episode_num_requests, dtype=int)
-        episode_t_reservation = np.asarray(self._episode_t_reservation, dtype=float)
-        mean_num_requests = float(episode_num_requests.mean())
-        mean_t_reservation = float(episode_t_reservation.mean())
+        if num_requests != len(request_stays):
+            raise ValueError("Numero di richieste e soggiorni non coerente.")
 
-        if self.log_to_mlflow:
-            # Log num_requests CSV
-            buf = StringIO()
-            writer = csv.writer(buf)
-            writer.writerow(["day", "num_requests"])
-            writer.writerows(enumerate(self._episode_num_requests))
-            mlflow.log_text(
-                buf.getvalue(),
-                f"episodes/{self.split}/episode_{self._episode_id:05d}_num_requests.csv",
-            )
+        for check_in, nights in request_stays:
+            if check_in < day_index or nights <= 0:
+                raise ValueError("Soggiorno non valido.")
 
-            # Log t_reservation CSV
-            buf = StringIO()
-            writer = csv.writer(buf)
-            writer.writerow(["day", "t_reservation_mean"])
-            writer.writerows(enumerate(self._episode_t_reservation))
-            mlflow.log_text(
-                buf.getvalue(),
-                f"episodes/{self.split}/episode_{self._episode_id:05d}_t_reservation.csv",
-            )
+        if self._simulation_days is None:
+            self._simulation_days = simulation_days
+            self._arrivals = np.zeros(simulation_days, dtype=np.int64)
+            self._stays = np.zeros(simulation_days, dtype=np.int64)
+            self._arrivals_sum = np.zeros(simulation_days, dtype=np.int64)
+            self._stays_sum = np.zeros(simulation_days, dtype=np.int64)
 
-        # Accumulate num_requests
-        if self._day_num_requests_sum is None or self._day_num_requests_count is None:
-            self._day_num_requests_sum = np.zeros_like(episode_num_requests, dtype=float)
-            self._day_num_requests_count = np.zeros_like(episode_num_requests, dtype=int)
-        if self._day_num_requests_sum.shape != episode_num_requests.shape:
-            # Pad shorter arrays
-            padding_len = len(self._day_num_requests_sum) - len(episode_num_requests)
-            padding = np.zeros(padding_len, dtype=int)
-            counts_padding = np.zeros(padding_len, dtype=int)
-            episode_num_requests = np.concatenate([episode_num_requests, padding])
-            counts_considering_padding = np.concatenate(
-                [
-                    np.ones_like(
-                        episode_num_requests[: len(self._episode_num_requests)], dtype=int
-                    ),
-                    counts_padding,
-                ]
-            )
-            self._day_num_requests_count += counts_considering_padding
-        else:
-            self._day_num_requests_count += 1
-        self._day_num_requests_sum += episode_num_requests.astype(float)
+        assert self._arrivals is not None
+        assert self._stays is not None
 
-        # Accumulate t_reservation
-        if self._day_t_reservation_sum is None or self._day_t_reservation_count is None:
-            self._day_t_reservation_sum = np.zeros_like(episode_t_reservation, dtype=float)
-            self._day_t_reservation_count = np.zeros_like(episode_t_reservation, dtype=int)
-        if self._day_t_reservation_sum.shape != episode_t_reservation.shape:
-            # Pad shorter arrays
-            padding_len = len(self._day_t_reservation_sum) - len(episode_t_reservation)
-            padding = np.zeros(padding_len, dtype=float)
-            counts_padding = np.zeros(padding_len, dtype=int)
-            episode_t_reservation = np.concatenate([episode_t_reservation, padding])
-            counts_considering_padding = np.concatenate(
-                [
-                    np.ones_like(
-                        episode_t_reservation[: len(self._episode_t_reservation)], dtype=int
-                    ),
-                    counts_padding,
-                ]
-            )
-            self._day_t_reservation_count += counts_considering_padding
-        else:
-            self._day_t_reservation_count += 1
-        self._day_t_reservation_sum += episode_t_reservation
+        self._arrivals[day_index] = num_requests
 
-        self._episode_num_requests = []
-        self._episode_t_reservation = []
-        self._episode_id += 1
+        for check_in, nights in request_stays:
+            stop = min(check_in + nights, simulation_days)
+            if check_in < stop:
+                self._stays[check_in:stop] += 1
 
-        return mean_num_requests, mean_t_reservation
+        self._next_day += 1
 
-    def finalize_training(self) -> None:
-        """Finalize training: flush any remaining episode data and log
-        per-day averages to mlflow.
-        """
-        if self._episode_num_requests:
-            self.end_episode()
-
-        if not self.log_to_mlflow:
+    def end_episode(self) -> None:
+        if self._next_day == 0:
             return
 
-        # Log per-day num_requests
-        if self._day_num_requests_sum is not None and self._day_num_requests_count is not None:
-            for day in range(len(self._day_num_requests_sum)):
-                mlflow.log_metric(
-                    f"num_requests/by_request_day/{self.split}",
-                    float(self._day_num_requests_sum[day] / self._day_num_requests_count[day]),
-                    step=day,
-                )
+        if self._next_day != self._simulation_days:
+            raise ValueError("Impossibile chiudere un episodio incompleto.")
 
-        # Log per-day t_reservation
-        if self._day_t_reservation_sum is not None and self._day_t_reservation_count is not None:
-            for day in range(len(self._day_t_reservation_sum)):
+        assert self._arrivals is not None
+        assert self._stays is not None
+        assert self._arrivals_sum is not None
+        assert self._stays_sum is not None
+
+        if self.log_to_mlflow:
+            buf = StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["day", "requests_arriving", "requests_covering_night"])
+            writer.writerows(
+                (day + 1, int(arrivals), int(stays))
+                for day, (arrivals, stays) in enumerate(
+                    zip(self._arrivals, self._stays, strict=True)
+                )
+            )
+            mlflow.log_text(
+                buf.getvalue(),
+                (f"episodes/{self.split}/episode_{self._episode_id:05d}_request_counts.csv"),
+            )
+
+        self._arrivals_sum += self._arrivals
+        self._stays_sum += self._stays
+        self._completed_episodes += 1
+
+        # Sommiamo gli arrivi, NON le notti richieste.
+        self._pending_requests += int(self._arrivals.sum())
+        self._pending_episodes += 1
+
+        self._episode_id += 1
+        self._clear_episode()
+
+    def log_step_metrics(self, step: int) -> None:
+        """Media dei totali degli episodi completati dall'ultimo logging."""
+        if self._pending_episodes == 0:
+            return
+
+        mean_requests = self._pending_requests / self._pending_episodes
+
+        if self.log_to_mlflow:
+            mlflow.log_metric(
+                (f"num_requests_per_episode/by_training_timesteps/{self.split}"),
+                float(mean_requests),
+                step=step,
+            )
+
+        # Il checkpoint successivo non deve includere episodi precedenti.
+        self._pending_requests = 0
+        self._pending_episodes = 0
+
+    def _clear_episode(self) -> None:
+        if self._arrivals is not None:
+            self._arrivals.fill(0)
+        if self._stays is not None:
+            self._stays.fill(0)
+        self._next_day = 0
+
+    def finalize_training(self) -> None:
+        # Non mescoliamo un episodio parziale con quelli completi.
+        self._clear_episode()
+        # I punti temporali vengono registrati dai callback.
+        # Qui non inventiamo un timestep per eventuali dati rimasti.
+        self._pending_requests = 0
+        self._pending_episodes = 0
+
+        if not self.log_to_mlflow or self._completed_episodes == 0:
+            return
+
+        assert self._arrivals_sum is not None
+        assert self._stays_sum is not None
+
+        for axis, totals in (
+            ("by_request_day", self._arrivals_sum),
+            ("by_stay_day", self._stays_sum),
+        ):
+            for day, total in enumerate(totals):
                 mlflow.log_metric(
-                    f"num_requests/by_reservation_day/{self.split}",
-                    float(self._day_t_reservation_sum[day] / self._day_t_reservation_count[day]),
-                    step=day,
+                    (f"num_requests/{axis}/mean_completed_episodes/{self.split}"),
+                    float(total / self._completed_episodes),
+                    step=day + 1,
                 )
