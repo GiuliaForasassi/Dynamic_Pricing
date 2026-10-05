@@ -98,7 +98,7 @@ def test_missing_day_is_rejected():
     tracker = module.RequestTracker("train", log_to_mlflow=False)
     record(tracker, 0, 3, [])
 
-    with pytest.raises(ValueError, match="fuori sequenza"):
+    with pytest.raises(ValueError, match="out-of-sequence"):
         record(tracker, 2, 3, [])
 
 
@@ -106,7 +106,7 @@ def test_partial_episode_cannot_be_marked_complete():
     tracker = module.RequestTracker("train", log_to_mlflow=False)
     record(tracker, 0, 2, [])
 
-    with pytest.raises(ValueError, match="episodio incompleto"):
+    with pytest.raises(ValueError, match="incomplete episode"):
         tracker.end_episode()
 
 

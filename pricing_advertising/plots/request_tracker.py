@@ -7,20 +7,14 @@ import mlflow
 import numpy as np
 
 
+# ---------------- REQUEST TRACKER ------------------
+# Tracks requests by 2 different points of view:
+# 1. by_request_day: counts requests arriving on each day.
+# 2. by_stay_day: counts requests covering each night of the stay.
+# Example: taking a request the day 5 for a 3-night stay with check-in the day 10
+# by_request_day will count this request on day 5 --> +1 at the day 5
+# by_stay_day will count this request on days 10, 11, and 12 --> +1 at each of these days
 class RequestTracker:
-    """Conteggi per giorno, mediati sui soli episodi completi della run.
-
-    by_request_day:
-        richieste arrivate quel giorno, anche per soggiorni fuori
-        dall'intervallo visualizzato.
-
-    by_stay_day:
-        richieste che comprendono quella notte, ricevute durante
-        l'intero episodio, indipendentemente dall'esito.
-
-    Gli indici interni sono zero-based; CSV e metriche usano giorni 1-based.
-    """
-
     def __init__(self, split: str, log_to_mlflow: bool = True) -> None:
         self.split = split
         self.log_to_mlflow = log_to_mlflow
@@ -37,6 +31,7 @@ class RequestTracker:
         self._arrivals_sum: np.ndarray | None = None
         self._stays_sum: np.ndarray | None = None
 
+    # -------------------- RECORDING EACH DAY--------------------
     def record_day(
         self,
         *,
@@ -45,23 +40,24 @@ class RequestTracker:
         num_requests: int,
         request_stays: list[tuple[int, int]],
     ) -> None:
+        # - Validate input parameters
         if simulation_days <= 0:
-            raise ValueError("Durata della simulazione non positiva.")
+            raise ValueError("Simulation days must be positive.")
 
-        if self._simulation_days is not None:
-            if simulation_days != self._simulation_days:
-                raise ValueError("Durata cambiata: usare un tracker separato.")
+        if self._simulation_days is not None and simulation_days != self._simulation_days:
+            raise ValueError("Simulation duration changed: use a separate tracker.")
 
         if day_index != self._next_day or day_index >= simulation_days:
-            raise ValueError("Giorno mancante, duplicato o fuori sequenza.")
+            raise ValueError("Missing, duplicate, or out-of-sequence day.")
 
         if num_requests != len(request_stays):
-            raise ValueError("Numero di richieste e soggiorni non coerente.")
+            raise ValueError("Number of requests and stays inconsistent.")
 
         for check_in, nights in request_stays:
             if check_in < day_index or nights <= 0:
-                raise ValueError("Soggiorno non valido.")
+                raise ValueError("Invalid stay.")
 
+        # - Initialize arrays if this is the first day of the simulation
         if self._simulation_days is None:
             self._simulation_days = simulation_days
             self._arrivals = np.zeros(simulation_days, dtype=np.int64)
@@ -72,6 +68,7 @@ class RequestTracker:
         assert self._arrivals is not None
         assert self._stays is not None
 
+        # - Record arrivals and stays for the current day
         self._arrivals[day_index] = num_requests
 
         for check_in, nights in request_stays:
@@ -81,18 +78,22 @@ class RequestTracker:
 
         self._next_day += 1
 
+    # -------------------- END OF EPISODE --------------------
+    # End of episode and update statistics
     def end_episode(self) -> None:
+        # - Validations
         if self._next_day == 0:
             return
 
         if self._next_day != self._simulation_days:
-            raise ValueError("Impossibile chiudere un episodio incompleto.")
+            raise ValueError("Cannot close an incomplete episode.")
 
         assert self._arrivals is not None
         assert self._stays is not None
         assert self._arrivals_sum is not None
         assert self._stays_sum is not None
 
+        # - Log episode data to MLflow if enabled
         if self.log_to_mlflow:
             buf = StringIO()
             writer = csv.writer(buf)
@@ -108,24 +109,31 @@ class RequestTracker:
                 (f"episodes/{self.split}/episode_{self._episode_id:05d}_request_counts.csv"),
             )
 
+        # - Update cumulative statistics
         self._arrivals_sum += self._arrivals
         self._stays_sum += self._stays
         self._completed_episodes += 1
 
-        # Sommiamo gli arrivi, NON le notti richieste.
+        # - Update pending requests and episodes for the next logging checkpoint
         self._pending_requests += int(self._arrivals.sum())
         self._pending_episodes += 1
 
+        # - Increment episode ID and clear the current episode data
         self._episode_id += 1
         self._clear_episode()
 
+    # -------------------- LOG STEP METRICS --------------------
     def log_step_metrics(self, step: int) -> None:
-        """Media dei totali degli episodi completati dall'ultimo logging."""
+        # - Return early if there are no pending episodes to log
         if self._pending_episodes == 0:
             return
 
-        mean_requests = self._pending_requests / self._pending_episodes
+        # - Compute the mean number of requests per pending episode
+        mean_requests = (
+            self._pending_requests / self._pending_episodes
+        )  # Mean number of requests per episode
 
+        # - Log the mean number of requests per pending episode to MLflow if enabled
         if self.log_to_mlflow:
             mlflow.log_metric(
                 (f"num_requests_per_episode/by_training_timesteps/{self.split}"),
@@ -133,10 +141,11 @@ class RequestTracker:
                 step=step,
             )
 
-        # Il checkpoint successivo non deve includere episodi precedenti.
+        # - Reset pending requests and episodes for the next logging checkpoint
         self._pending_requests = 0
         self._pending_episodes = 0
 
+    # -------------------- CLEAR EPISODE --------------------
     def _clear_episode(self) -> None:
         if self._arrivals is not None:
             self._arrivals.fill(0)
@@ -144,20 +153,24 @@ class RequestTracker:
             self._stays.fill(0)
         self._next_day = 0
 
+    # -------------------- FINALIZE TRAINING --------------------
     def finalize_training(self) -> None:
-        # Non mescoliamo un episodio parziale con quelli completi.
+        # - Clear any partial episode and reset pending requests and episodes
+        # Do not mix a partial episode with the completed ones.
         self._clear_episode()
-        # I punti temporali vengono registrati dai callback.
-        # Qui non inventiamo un timestep per eventuali dati rimasti.
+        # Timesteps are logged by the callbacks.
+        # Do not invent a timestep for any remaining data here.
         self._pending_requests = 0
         self._pending_episodes = 0
 
+        # - Return early if there are no completed episodes to log to MLflow
         if not self.log_to_mlflow or self._completed_episodes == 0:
             return
 
         assert self._arrivals_sum is not None
         assert self._stays_sum is not None
 
+        # - Log the mean number of arrivals and stays per completed episode to MLflow
         for axis, totals in (
             ("by_request_day", self._arrivals_sum),
             ("by_stay_day", self._stays_sum),

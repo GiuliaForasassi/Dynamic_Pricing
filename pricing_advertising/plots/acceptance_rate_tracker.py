@@ -5,17 +5,21 @@ from dataclasses import dataclass
 import mlflow
 
 
+# -------- ACCEPTANCE COUNTS --------
 @dataclass(frozen=True)
 class AcceptanceCounts:
-    requests: int = 0
-    offers: int = 0
-    price_accepted: int = 0
-    confirmed: int = 0
+    requests: int = 0  # Total number of requests received
+    offers: int = 0  # Total number of offers made
+    price_accepted: int = 0  # Total number of offers accepted based on price
+    confirmed: int = 0  # Total number of confirmed requests
 
+    # -------- Validation --------
+    # requests >= offers >= price_accepted >= confirmed >= 0
     def __post_init__(self) -> None:
         if not (0 <= self.confirmed <= self.price_accepted <= self.offers <= self.requests):
-            raise ValueError("Conteggi di acceptance incoerenti.")
+            raise ValueError("Acceptance counts are inconsistent.")
 
+    # -------- Arithmetic Operations --------
     def __add__(self, other: AcceptanceCounts) -> AcceptanceCounts:
         return AcceptanceCounts(
             requests=self.requests + other.requests,
@@ -24,17 +28,24 @@ class AcceptanceCounts:
             confirmed=self.confirmed + other.confirmed,
         )
 
+    # -------- Rate Computation --------
     def rates(self) -> dict[str, float]:
         return {
+            # Confirmation rate: confirmed requests / total requests
+            # How many of the total requests were confirmed and began effective bookings?
             "confirmation_rate": (
                 self.confirmed / self.requests if self.requests > 0 else float("nan")
             ),
+            # Price acceptance rate: price_accepted / offers
+            # Between clients who received an offer, how many accepted?
             "price_acceptance_rate": (
                 self.price_accepted / self.offers if self.offers > 0 else float("nan")
             ),
         }
 
 
+# -------- ACCEPTANCE RATE TRACKER --------
+# Tracker for acceptance rates based on daily request and offer counts.
 class AcceptanceRateTracker:
     """Tassi per giorno di richiesta e per timestep di training.
 
@@ -59,6 +70,7 @@ class AcceptanceRateTracker:
         self._by_day: dict[int, AcceptanceCounts] = {}
         self._pending_counts: AcceptanceCounts | None = None
 
+    # --------- RECORD DAY --------
     def record_day(
         self,
         *,
@@ -69,18 +81,20 @@ class AcceptanceRateTracker:
         num_price_accepted: int,
         num_confirmed: int,
     ) -> None:
+        # - Validate input and sequence of days before recording.
         if simulation_days <= 0:
-            raise ValueError("La durata dell'episodio deve essere positiva.")
+            raise ValueError("Simulation days must be positive.")
 
         if self._expected_days is None:
             self._expected_days = simulation_days
         elif simulation_days != self._expected_days:
-            raise ValueError("Durata cambiata durante l'episodio.")
+            raise ValueError("Simulation duration changed during the episode.")
 
-        # Ogni giorno va registrato, anche con tutti i conteggi a zero.
+        # Each day must be recorded, even with all counts set to zero.
         if day_index != len(self._episode) or day_index >= simulation_days:
-            raise ValueError("Giorno mancante, duplicato o fuori sequenza.")
+            raise ValueError("Missing, duplicate, or out-of-sequence day.")
 
+        # - Record the day's counts.
         self._episode.append(
             AcceptanceCounts(
                 requests=num_requests,
@@ -90,15 +104,17 @@ class AcceptanceRateTracker:
             )
         )
 
+    # --------- END EPISODE --------
     def end_episode(self) -> AcceptanceCounts | None:
         if not self._episode:
             return None
 
         if len(self._episode) != self._expected_days:
-            raise ValueError("Impossibile chiudere un episodio incompleto.")
+            raise ValueError("Cannot close an incomplete episode.")
 
         totals = AcceptanceCounts()
 
+        # - Aggregate counts for the episode and update pending counts.
         for day_index, counts in enumerate(self._episode):
             totals = totals + counts
             self._by_day[day_index] = self._by_day.get(day_index, AcceptanceCounts()) + counts
@@ -112,6 +128,7 @@ class AcceptanceRateTracker:
         self._expected_days = None
         return totals
 
+    # --------- LOG RATES --------
     def _log_rates(
         self,
         counts: AcceptanceCounts,
@@ -122,6 +139,7 @@ class AcceptanceRateTracker:
         if not self.log_to_mlflow:
             return
 
+        # - Log the acceptance rates for the given counts.
         for name, value in counts.rates().items():
             mlflow.log_metric(
                 f"{name}/{axis}/{self.split}",
@@ -129,8 +147,9 @@ class AcceptanceRateTracker:
                 step=step,
             )
 
+    # --------- LOG STEP METRICS --------
+    # Log and clear the counts of completed episodes pending.
     def log_step_metrics(self, step: int) -> None:
-        """Logga e svuota i conteggi degli episodi completi in attesa."""
         if self._pending_counts is None:
             return
 
@@ -141,12 +160,16 @@ class AcceptanceRateTracker:
         )
         self._pending_counts = None
 
+    # --------- FINALIZE TRAINING --------
     def finalize_training(self) -> None:
-        # Un episodio interrotto dalla fine del training non entra
-        # nei riepiloghi degli episodi completi.
+        # An episode interrupted by the end of training does not enter
+        # the summaries of completed episodes.
+
+        # Clear any ongoing episode as it will not be included in the summaries.
         self._episode = []
         self._expected_days = None
 
+        # Log the acceptance rates for each day of completed episodes.
         for day_index, counts in sorted(self._by_day.items()):
             self._log_rates(
                 counts,

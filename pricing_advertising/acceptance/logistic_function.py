@@ -1,39 +1,55 @@
-import random
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 from loguru import logger
-from scipy.stats import norm
 
 from pricing_advertising.acceptance.acceptance import ABCAcceptanceModel
 from pricing_advertising.enums.enums import RoomCategory
-from pricing_advertising.requests.request import Request
+from pricing_advertising.requests.request import HotelOffer, Request
+from pricing_advertising.utils.constants import HIGH_SEASON
 
 
+# ------------- LOGISTIC ACCEPTANCE MODEL -------------
 class LogisticAcceptanceModel(ABCAcceptanceModel):
-    def __init__(self, beta: float, avg_prices: dict, st_deviations: dict) -> None:
+    def __init__(
+        self,
+        beta: float,
+        avg_prices: dict,
+        st_deviations: dict,
+        *,
+        high_season_multipliers: dict[int, float] | None = None,
+    ) -> None:
+        super().__init__()
         # Beta parameter: check how sensitive the probability is to the difference between the proposed price and the reference price
         self.beta = beta
-        # dictionaries with avg price and variance per category
+        # Dictionaries with avg price and variance per category
         self.avg_prices = avg_prices
         self.st_deviations = st_deviations
-        # can add season_factor to handle the seasonality of the prices
+        self.high_season_multipliers = dict(high_season_multipliers or {})
+        if any(
+            not np.isfinite(multiplier) or multiplier <= 0
+            for multiplier in self.high_season_multipliers.values()
+        ):
+            raise ValueError("High-season price multipliers must be finite and positive.")
 
-        # --- DEBUG counters ---
-        # self._dbg_seen = 0
-        # elf._dbg_acc = 0
-
-    def _accept(self, proposed_price: float, request: Request) -> bool:
-        category = request.category
+    # ----------------- Acceptance Based on Total Price -----------------
+    # Determines whether a given total price is accepted based on the logistic model.
+    def _accept(self, proposed_price: float, request: HotelOffer) -> bool:
+        # Extract relevant information from the request and calculate the proposed daily price.
+        category = request.request.category
         los = max(1, int(request.days_stay))
         proposed_daily = proposed_price / los
-
+        # Retrieve the standard deviation and average price for the requested category.
         st_deviations = self.st_deviations[category.value]
         avg_price = self.avg_prices[category.value]
 
-        # generate the reference price for the client for the requested category
-        reference_price = self.generate_reference_price(category=category)
-
+        # Generate the reference price for the client for the requested category
+        reference_price = self.generate_reference_price(
+            category=category,
+            t_reservation=request.t_reservation,
+            days_stay=los,
+        )
+        # Calculate the acceptance probability using the logistic function.
         acceptance_probability = self.logistic_function(
             reference_price=reference_price,
             proposed_price=proposed_daily,
@@ -41,46 +57,50 @@ class LogisticAcceptanceModel(ABCAcceptanceModel):
             standard_deviation=st_deviations,
             avg_price=avg_price,
         )
-        # penalty if you propose an alternative: the acceptance is reduced by 20%
-        if request.proposed_t_reservation is not None or request.proposed_days_stay is not None:
+        # Penalty if you propose an alternative: the acceptance is reduced by 20%
+        if request.period_changed:
             acceptance_probability *= 0.8
 
-        # transform the probability in a boolean decision
-        random_number = random.random()
+        # Transform the probability into a boolean decision
+        random_number = float(self.rng.random())
+        # Compare the random number with the acceptance probability to make the decision
         accepted = random_number <= acceptance_probability
-
-        # --- DEBUG SECTION ---
-        """
-        self._dbg_seen += 1
-        self._dbg_acc += int(accepted)
-
-        # Ogni 500 richieste stampa il tasso di accettazione medio
-        if self._dbg_seen % 500 == 0:
-            rate = self._dbg_acc / self._dbg_seen
-            print(f"[ACCEPT-STAT] seen={self._dbg_seen} acc_rate={rate:.2%}")
-
-        # Stampa il dettaglio di alcune richieste (1% circa)
-        if random.random() < 0.01:
-            std = np.sqrt(variance)
-            print(
-                f"[ACCEPT-DBG] cat={category.value} avg={avg_price:.1f} ref={reference_price:.1f} "
-                f"prop={proposed_price:.1f} std={std:.2f} beta={self.beta:.2f} "
-                f"p={acceptance_probability:.3f} accepted={accepted}"
-            )"""
-        # --- END DEBUG SECTION ---
-
+        # Return the final acceptance decision
         return accepted
 
-    def _accept_daily_price(self, daily_price: float, request: Request) -> bool:
-        return self._accept(daily_price, request)
+    # ----------------- Acceptance Based on Daily Price -----------------
+    # Method to determine acceptance based on the daily price rather than the total price.
+    def _accept_daily_price(self, daily_price: float, request: HotelOffer) -> bool:
+        return self._accept(daily_price * request.days_stay, request)
 
-    def generate_reference_price(self, category: RoomCategory) -> float:
+    # ----------------- Reference Price Generation -----------------
+    # Method to generate a reference price for a given room category based on the average price and standard deviation.
+    def generate_reference_price(
+        self,
+        category: RoomCategory,
+        *,
+        t_reservation: date | None = None,
+        days_stay: int = 1,
+    ) -> float:
+        if days_stay < 1:
+            raise ValueError("The reference-price stay must contain at least one night.")
+        # Retrieve the average price and standard deviation for the given room category.
         avg_price = self.avg_prices[category.value]
         std = self.st_deviations[category.value]
-
-        reference_price = norm.rvs(loc=avg_price, scale=std)
+        if t_reservation is not None:
+            high_season_nights = sum(
+                (t_reservation + timedelta(days=night)).month in HIGH_SEASON
+                for night in range(days_stay)
+            )
+            multiplier = self.high_season_multipliers.get(category.value, 1.0)
+            avg_price *= 1.0 + (multiplier - 1.0) * high_season_nights / days_stay
+        # Generate the reference price using a normal distribution centered around the average price with the given standard deviation.
+        reference_price = float(self.rng.normal(loc=avg_price, scale=std))
+        # Ensure the reference price is non-negative before returning.
         return max(0, reference_price)
 
+    # ----------------- Logistic Function -----------------
+    # Method to calculate the acceptance probability using the logistic function.
     def logistic_function(
         self,
         proposed_price: float,
@@ -124,7 +144,8 @@ if __name__ == "__main__":
         t_request=date.today(), t_reservation=date(2025, 3, 30), days_stay=3, num_guests=2
     )
     total_proposed_price = 110
-    acceptance = logistic_model.accept(total_proposed_price, request)
+    offer = HotelOffer(request, request.category, request.t_reservation, request.days_stay)
+    acceptance = logistic_model.accept(total_proposed_price, offer)
     logger.info(f"Request: {request}")
     logger.info(f"Acceptance: {acceptance}")
 

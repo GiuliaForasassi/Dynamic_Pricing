@@ -176,7 +176,7 @@ def test_duplicate_or_missing_day_is_rejected(bad_day):
     tracker = module.PriceTracker("train", log_to_mlflow=False)
     record(tracker, 0, 3)
 
-    with pytest.raises(ValueError, match="fuori sequenza"):
+    with pytest.raises(ValueError, match="out-of-sequence"):
         record(tracker, bad_day, 3)
 
 
@@ -184,7 +184,7 @@ def test_incomplete_episode_cannot_be_closed():
     tracker = module.PriceTracker("train", log_to_mlflow=False)
     record(tracker, 0, 2)
 
-    with pytest.raises(ValueError, match="incompleto"):
+    with pytest.raises(ValueError, match="incomplete episode"):
         tracker.end_episode()
 
 
@@ -192,7 +192,7 @@ def test_incomplete_episode_cannot_be_closed():
 def test_invalid_price_is_rejected(price):
     tracker = module.PriceTracker("train", log_to_mlflow=False)
 
-    with pytest.raises(ValueError, match="Prezzi non validi"):
+    with pytest.raises(ValueError, match="Invalid prices"):
         record(tracker, 0, 2, [request(1, 1)], [price])
 
 
@@ -200,7 +200,7 @@ def test_invalid_price_is_rejected(price):
 def test_price_length_mismatch_is_rejected_without_recording_day(prices):
     tracker = module.PriceTracker("train", log_to_mlflow=False)
 
-    with pytest.raises(ValueError, match="non allineati"):
+    with pytest.raises(ValueError, match="Nightly prices not aligned"):
         record(tracker, 0, 3, [request(1, 2)], prices)
 
     # Il tentativo fallito non deve consumare il giorno.
@@ -211,7 +211,7 @@ def test_changed_calendar_is_rejected():
     tracker = module.PriceTracker("train", log_to_mlflow=False)
     complete(tracker, 2)
 
-    with pytest.raises(ValueError, match="Calendario cambiato"):
+    with pytest.raises(ValueError, match="Calendar changed"):
         record(tracker, 0, 3)
 
 

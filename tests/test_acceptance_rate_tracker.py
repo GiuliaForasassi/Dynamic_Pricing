@@ -129,7 +129,7 @@ def test_incomplete_episode_cannot_be_marked_complete():
     tracker = AcceptanceRateTracker("train", log_to_mlflow=False)
     record(tracker, 0, 2, (1, 1, 1, 1))
 
-    with pytest.raises(ValueError, match="episodio incompleto"):
+    with pytest.raises(ValueError, match="incomplete episode"):
         tracker.end_episode()
 
 
@@ -137,12 +137,12 @@ def test_missing_day_is_rejected():
     tracker = AcceptanceRateTracker("train", log_to_mlflow=False)
     record(tracker, 0, 3, (1, 1, 1, 1))
 
-    with pytest.raises(ValueError, match="fuori sequenza"):
+    with pytest.raises(ValueError, match="out-of-sequence"):
         record(tracker, 2, 3, (1, 1, 1, 1))
 
 
 def test_invalid_counts_are_rejected():
     tracker = AcceptanceRateTracker("train", log_to_mlflow=False)
 
-    with pytest.raises(ValueError, match="Conteggi"):
+    with pytest.raises(ValueError, match="Acceptance counts are inconsistent"):
         record(tracker, 0, 1, (2, 1, 0, 1))

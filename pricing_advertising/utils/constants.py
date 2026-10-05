@@ -64,6 +64,12 @@ LOGISTIC_ACCEPTANCE_AVG_PRICES = {
     3: 550,
 }
 
+LOGISTIC_ACCEPTANCE_HIGH_SEASON_MULTIPLIERS = {
+    1: 1.2,
+    2: 1.2,
+    3: 1.2,
+}
+
 # 1/4 of the avg price
 LOGISTIC_ACCEPTANCE_STDS = {
     1: 30,

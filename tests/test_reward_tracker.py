@@ -118,7 +118,7 @@ def test_incomplete_episode_cannot_be_closed():
     tracker = module.RewardTracker("train", log_to_mlflow=False)
     tracker.record_day(day_index=0, simulation_days=2, reward=10.0)
 
-    with pytest.raises(ValueError, match="incompleto"):
+    with pytest.raises(ValueError, match="incomplete episode"):
         tracker.end_episode()
 
 
@@ -126,7 +126,7 @@ def test_missing_day_is_rejected():
     tracker = module.RewardTracker("train", log_to_mlflow=False)
     tracker.record_day(day_index=0, simulation_days=3, reward=10.0)
 
-    with pytest.raises(ValueError, match="fuori sequenza"):
+    with pytest.raises(ValueError, match="out-of-sequence"):
         tracker.record_day(day_index=2, simulation_days=3, reward=20.0)
 
 
@@ -134,7 +134,7 @@ def test_changed_duration_is_rejected():
     tracker = module.RewardTracker("train", log_to_mlflow=False)
     record_episode(tracker, [10.0])
 
-    with pytest.raises(ValueError, match="Durata cambiata"):
+    with pytest.raises(ValueError, match="Simulation duration changed"):
         tracker.record_day(day_index=0, simulation_days=2, reward=20.0)
 
 
@@ -142,7 +142,7 @@ def test_changed_duration_is_rejected():
 def test_nonfinite_reward_is_rejected(reward):
     tracker = module.RewardTracker("train", log_to_mlflow=False)
 
-    with pytest.raises(ValueError, match="finito"):
+    with pytest.raises(ValueError, match="Reward must be finite"):
         tracker.record_day(day_index=0, simulation_days=1, reward=reward)
 
 

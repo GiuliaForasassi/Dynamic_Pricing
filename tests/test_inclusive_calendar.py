@@ -11,6 +11,45 @@ from pricing_advertising.pricing_model import bar_table
 
 
 @pytest.mark.parametrize(
+    "start", [date(2025, 7, 1), date(2024, 2, 28), date(2024, 12, 31), date(2025, 12, 31)]
+)
+def test_calendar_observation_uses_current_date_and_actual_year(monkeypatch, start):
+    csv_path = Path(__file__).resolve().parents[1] / "data" / "bar_table.csv"
+    monkeypatch.setattr(bar_table, "BAR_TABLE", bar_table.load_bar_table_wide_csv(csv_path))
+    env = PricingEnv(
+        start, start + timedelta(days=1), Hotel(10, 10, 10), avg_num_requests=0, seed=42
+    )
+    try:
+        observation, _ = env.reset(seed=42)
+        initial = observation["calendar"].copy()
+        previous = initial.copy()
+        for offset in range(3):
+            current = start + timedelta(days=offset)
+            year_start = date(current.year, 1, 1)
+            year_length = (date(current.year + 1, 1, 1) - year_start).days
+            phase = 2 * np.pi * (current - year_start).days / year_length
+            assert env.today == current
+            assert observation["calendar"].shape == (2,)
+            assert observation["calendar"].dtype == np.float32
+            assert env.observation_space.contains(observation)
+            np.testing.assert_allclose(
+                observation["calendar"], [np.sin(phase), np.cos(phase)], atol=1e-7
+            )
+            assert observation["today"][0] == pytest.approx(min(offset / 2, 1))
+            assert observation["seasonality"] == env.get_seasonality(current)
+            if offset > 0:
+                assert np.linalg.norm(observation["calendar"] - previous) < 0.018
+            previous = observation["calendar"].copy()
+            if offset < 2:
+                observation, _, terminated, _, _ = env.step(np.zeros(env.action_space.shape))
+                assert terminated == (offset == 1)
+        observation, _ = env.reset(seed=42)
+        np.testing.assert_array_equal(observation["calendar"], initial)
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
     "start,end,expected_days",
     [
         (date(2025, 1, 1), date(2025, 12, 31), 365),
@@ -60,9 +99,22 @@ def test_environment_includes_last_day(monkeypatch, start, end, expected_days):
         action = np.zeros(env.action_space.shape, dtype=np.float32)
 
         for index in range(expected_days):
+            levels_before = env.bar_levels[:, expected_days - 1].copy()
+            occupancy_before = env.occupancy[:, expected_days - 1].copy()
             observation, _, terminated, truncated, info = env.step(action)
             payload = info["eval_artifacts"]
 
+            assert payload["max_bar_level"] == env._max_bar_level
+            assert list(payload["bar_history"]) == [end.isoformat()]
+            point = payload["bar_history"][end.isoformat()]
+            np.testing.assert_array_equal(point["levels_before"], levels_before)
+            np.testing.assert_array_equal(point["occupancy_before"], occupancy_before)
+            np.testing.assert_array_equal(
+                point["levels_after"], env.bar_levels[:, expected_days - 1]
+            )
+            np.testing.assert_array_equal(
+                point["occupancy_after"], env.occupancy[:, expected_days - 1]
+            )
             assert payload["request_day"] == (start + timedelta(days=index)).isoformat()
             assert payload["day_index"] == index
             assert not truncated
@@ -78,6 +130,36 @@ def test_environment_includes_last_day(monkeypatch, start, end, expected_days):
         assert payload["snapshot_start_day"] == end.isoformat()
         assert np.asarray(payload["occupancy_by_category"]).shape == (3, 1)
         assert np.asarray(payload["bar_prices_by_category"]).shape == (3, 1)
+    finally:
+        env.close()
+
+
+def test_booking_window_covers_observations_generation_and_bar(monkeypatch):
+    csv_path = Path(__file__).resolve().parents[1] / "data" / "bar_table.csv"
+    monkeypatch.setattr(bar_table, "BAR_TABLE", bar_table.load_bar_table_wide_csv(csv_path))
+    env = PricingEnv(
+        date(2025, 1, 1), date(2025, 12, 31), Hotel(10, 10, 10), avg_num_requests=0, seed=42
+    )
+    try:
+        for today in [env.start_simulation, date(2025, 7, 1), env.end_simulation]:
+            env.today = today
+            start, stop = env._booking_window_indices()
+            assert stop - start == env.window_span_days == 360
+            for _ in range(1000):
+                booking = env.request_generator._generate_request(today)
+                assert booking is not None
+                assert env._within_booking_window(booking)
+                assert 1 <= booking.advance <= 360
+                assert booking.advance + booking.days_stay <= 361
+            env.occupancy.fill(0)
+            env.bar_levels.fill(1)
+            env.occupancy[:, start:stop] = 10
+            observation = env.get_observation()
+            np.testing.assert_array_equal(observation["occupancy"], 1)
+            env._update_bar_for_requests_vectorized(np.ones(env.action_space.shape))
+            np.testing.assert_array_equal(env.bar_levels[:, start:stop], 2)
+            np.testing.assert_array_equal(env.bar_levels[:, :start], 1)
+            np.testing.assert_array_equal(env.bar_levels[:, stop:], 1)
     finally:
         env.close()
 
@@ -112,7 +194,7 @@ def test_artifact_validation_requires_last_day(num_steps, should_pass):
     if should_pass:
         log_eval_artifact_plots(artifact)
     else:
-        with pytest.raises(ValueError, match="episodio incompleto"):
+        with pytest.raises(ValueError, match="incomplete episode"):
             log_eval_artifact_plots(artifact)
 
 

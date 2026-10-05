@@ -128,7 +128,7 @@ def test_empty_hotel_episode_logs_zero(logged):
 def test_invalid_percentage_is_rejected(occupancy):
     tracker = module.OccupancyTracker("train", log_to_mlflow=False)
 
-    with pytest.raises(ValueError, match="Occupancy non valida"):
+    with pytest.raises(ValueError, match="Invalid occupancy"):
         tracker.record_day(
             day_index=0,
             simulation_days=1,
@@ -140,7 +140,7 @@ def test_missing_day_is_rejected():
     tracker = module.OccupancyTracker("train", log_to_mlflow=False)
     tracker.record_day(day_index=0, simulation_days=3, occupancy_pct=10.0)
 
-    with pytest.raises(ValueError, match="fuori sequenza"):
+    with pytest.raises(ValueError, match="out-of-sequence"):
         tracker.record_day(day_index=2, simulation_days=3, occupancy_pct=20.0)
 
 
@@ -148,7 +148,7 @@ def test_incomplete_episode_cannot_be_closed():
     tracker = module.OccupancyTracker("train", log_to_mlflow=False)
     tracker.record_day(day_index=0, simulation_days=2, occupancy_pct=10.0)
 
-    with pytest.raises(ValueError, match="incompleto"):
+    with pytest.raises(ValueError, match="incomplete episode"):
         tracker.end_episode()
 
 
@@ -156,7 +156,7 @@ def test_changed_duration_is_rejected():
     tracker = module.OccupancyTracker("train", log_to_mlflow=False)
     record_episode(tracker, [10.0])
 
-    with pytest.raises(ValueError, match="Durata cambiata"):
+    with pytest.raises(ValueError, match="Duration changed"):
         tracker.record_day(day_index=0, simulation_days=2, occupancy_pct=20.0)
 
 
