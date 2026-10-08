@@ -60,8 +60,48 @@ def _request_price_series(
     return series
 
 
+def _proposed_price_series(
+    steps: list[dict[str, Any]], request_date: date
+) -> list[tuple[int, np.ndarray, np.ndarray]]:
+    prices_by_category: dict[int, dict[int, list[float]]] = {}
+    for step in steps:
+        if step["request_day"] != request_date.isoformat():
+            continue
+        for request in step["requests"]:
+            if not request["valid"]:
+                continue
+            if date.fromisoformat(request["request_date"]) != request_date:
+                raise ValueError("Request associated with the wrong day.")
+            advance = (date.fromisoformat(request["check_in"]) - request_date).days
+            if advance < 0:
+                raise ValueError("Offered check-in precedes the request date.")
+            prices = np.asarray(request["daily_prices"], dtype=float)
+            if (
+                prices.ndim != 1
+                or prices.size == 0
+                or prices.size != int(request["days_stay"])
+                or not np.isfinite(prices).all()
+            ):
+                raise ValueError("Offer must contain one finite price per stay night.")
+            category = int(request["category"])
+            means_by_advance = prices_by_category.setdefault(category, {})
+            means_by_advance.setdefault(advance, []).append(float(np.mean(prices)))
+
+    series = []
+    for category, means_by_advance in sorted(prices_by_category.items()):
+        advances = np.asarray(
+            [advance for advance, means in sorted(means_by_advance.items()) for _ in means],
+            dtype=int,
+        )
+        means = np.asarray(
+            [mean for _, values in sorted(means_by_advance.items()) for mean in values],
+            dtype=float,
+        )
+        series.append((category, advances, means))
+    return series
+
+
 # ----------- LOG PROPOSED PRICE BY ADVANCE -----------
-# Function to log prices offered on a given request date by stay-day index.
 def log_proposed_price_by_advance(artifact: dict[str, Any], request_dates: list[date]) -> None:
     # Extract the steps and metadata from the artifact dictionary.
     steps = artifact["steps"]
@@ -76,34 +116,62 @@ def log_proposed_price_by_advance(artifact: dict[str, Any], request_dates: list[
     for request_date in sorted(set(request_dates)):
         if not start <= request_date <= end:
             raise ValueError("Request date is outside the simulation period.")
-        series = _request_price_series(steps, request_date, start, end)
-        first_day = (request_date - start).days + 1
-        last_day = (end - start).days + 1
+        series = _proposed_price_series(steps, request_date)
+        max_advance = max((int(advances[-1]) for _, advances, _ in series), default=0)
         # Create subplots for each category to visualize proposed prices by advance.
         fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True, sharey=True)
         try:
             for category, ax in enumerate(axes, start=1):
                 selected = [item for item in series if item[0] == category]
-                for _, days, prices in selected:
-                    ax.plot(days, prices, marker=".", markersize=3, color=f"C{category - 1}")
-                ax.set(title=f"Category {category}", ylabel="Proposed nightly price")
+                for _, advances, prices in selected:
+                    observed_advances = np.unique(advances)
+                    medians = [
+                        np.median(prices[advances == advance]) for advance in observed_advances
+                    ]
+                    ax.scatter(
+                        advances,
+                        prices,
+                        s=25,
+                        alpha=0.4,
+                        color=f"C{category - 1}",
+                        edgecolors="none",
+                        label="Individual offers",
+                        zorder=2,
+                    )
+                    ax.plot(
+                        observed_advances,
+                        medians,
+                        marker="o",
+                        markersize=4,
+                        color=f"C{category - 1}",
+                        label="Median by advance",
+                        zorder=3,
+                    )
+                    ax.legend()
+                ax.set(
+                    title=f"Category {category}",
+                    ylabel="Offered mean nightly price",
+                )
                 ax.grid(True, alpha=0.3)
                 if not selected:
                     ax.plot([], [], color=f"C{category - 1}")
                     ax.text(0.5, 0.5, "No observed offers", transform=ax.transAxes, ha="center")
             axes[-1].set(
-                xlabel="Stay day (1 = simulation start)",
-                xlim=(first_day, max(first_day + 1, last_day)),
+                xlabel="Advance (days from request to offered check-in)",
+                xlim=(-0.5, max(1, max_advance) + 0.5),
             )
             axes[-1].xaxis.set_major_locator(MaxNLocator(integer=True))
             fig.suptitle(
-                f"Requests received on {request_date} only | Timesteps: {checkpoint}\n"
+                f"Proposed price by advance | Requests received on {request_date} only\n"
+                f"Timesteps: {checkpoint} | "
                 f"Env: {env_idx} | Episode: {episode_id}"
             )
             fig.text(
                 0.08,
                 0.025,
-                "One line per category: actual prices for observed stay nights.\n",
+                "Scatter: one point per offer (overlaps possible). Line: median at each observed advance.\n"
+                "Full offered stays, including alternatives; accepted and rejected offers included.\n"
+                "One recorded offer per request. Lines connect observations, not prices at missing advances.",
                 fontsize=9,
                 va="bottom",
             )
@@ -462,12 +530,6 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
             "booked_price_points",
             "booked_price_plots",
             "Booked nightly price (offered nights)",
-            None,
-        ),
-        (
-            "requests",
-            "request_plots",
-            "Requests covering the originally requested night",
             None,
         ),
         (

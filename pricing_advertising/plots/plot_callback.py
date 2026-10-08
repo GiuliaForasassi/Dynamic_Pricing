@@ -9,6 +9,7 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.plots.acceptance_rate_tracker import AcceptanceRateTracker
+from pricing_advertising.plots.episode_metrics import EpisodeMetrics
 from pricing_advertising.plots.eval_artifact_plots import log_eval_artifact_plots
 from pricing_advertising.plots.occupancy_tracker import OccupancyTracker
 from pricing_advertising.plots.price_tracker import PriceTracker
@@ -190,14 +191,7 @@ class EvalOccupancyCallback(EvalCallback):
 
         self.log_to_mlflow = log_to_mlflow
 
-        # - Initialize trackers for evaluation metrics
-        self._occupancy_tracker = OccupancyTracker(split="val", log_to_mlflow=self.log_to_mlflow)
-        self._request_tracker = RequestTracker(split="val", log_to_mlflow=self.log_to_mlflow)
-        self._reward_tracker = RewardTracker(split="val", log_to_mlflow=self.log_to_mlflow)
-        self._price_tracker = PriceTracker(split="val", log_to_mlflow=self.log_to_mlflow)
-        self._acceptance_rate_tracker = AcceptanceRateTracker(
-            split="val", log_to_mlflow=self.log_to_mlflow
-        )
+        self._metrics = EpisodeMetrics(split="val", log_to_mlflow=self.log_to_mlflow)
         # Cache for the number of rooms per category for each environment index
         self._num_rooms_cache: dict[int, list[int]] = {}
 
@@ -224,55 +218,11 @@ class EvalOccupancyCallback(EvalCallback):
         # - Record the current evaluation step as an artifact.
         self._record_eval_artifact_step(locals_)
 
-        # - Extract the step metrics from the locals dictionary.
-        metrics = locals_["info"]["step_metrics"]
-
-        # - Record the various metrics for the current evaluation step in the respective trackers.
-        self._occupancy_tracker.record_day(
-            day_index=int(metrics["day_index"]),
-            simulation_days=int(metrics["simulation_days"]),
-            occupancy_pct=float(metrics["occupancy_pct"]),
-        )
-        self._request_tracker.record_day(
-            day_index=int(metrics["day_index"]),
-            simulation_days=int(metrics["simulation_days"]),
-            num_requests=int(metrics["num_requests"]),
-            request_stays=metrics["request_stays"],
-        )
-        self._reward_tracker.record_day(
-            day_index=int(metrics["day_index"]),
-            simulation_days=int(metrics["simulation_days"]),
-            reward=float(metrics["reward"]),
-        )
-
-        self._price_tracker.record_day(
-            day_index=int(metrics["day_index"]),
-            start_simulation=metrics["start_simulation"],
-            simulation_days=int(metrics["simulation_days"]),
-            confirmed_requests=metrics["confirmed_requests"],
-            confirmed_nightly_prices=metrics["confirmed_nightly_prices"],
-        )
-
-        self._acceptance_rate_tracker.record_day(
-            day_index=int(metrics["day_index"]),
-            simulation_days=int(metrics["simulation_days"]),
-            num_requests=int(metrics["num_requests"]),
-            num_offers=int(metrics["num_offers"]),
-            num_price_accepted=int(metrics["num_price_accepted"]),
-            num_confirmed=int(metrics["num_confirmed"]),
-        )
+        self._metrics.record_day(locals_["info"]["step_metrics"])
 
         # - If the evaluation episode is done, signal the end of the episode to all trackers.
         if bool(locals_["done"]):
-            self._occupancy_tracker.end_episode()
-
-            self._request_tracker.end_episode()
-
-            self._reward_tracker.end_episode()
-
-            self._price_tracker.end_episode()
-
-            self._acceptance_rate_tracker.end_episode()
+            self._metrics.end_episode()
 
     # ------------------------------- ON STEP -------------------------------
     def _on_step(self) -> bool:
@@ -289,23 +239,14 @@ class EvalOccupancyCallback(EvalCallback):
                 normalization.save(str(Path(self.best_model_save_path) / "best_vecnormalize.pkl"))
 
         # - Log the step metrics for all trackers
-        self._request_tracker.log_step_metrics(step=self.num_timesteps)
-        self._acceptance_rate_tracker.log_step_metrics(step=self.num_timesteps)
-        self._reward_tracker.log_step_metrics(step=self.num_timesteps)
-        self._occupancy_tracker.log_step_metrics(step=self.num_timesteps)
-        self._price_tracker.log_step_metrics(step=self.num_timesteps)
+        self._metrics.log_step_metrics(step=self.num_timesteps)
 
         return continue_training
 
     # ------------------------------- ON TRAINING END -------------------------------
     def _on_training_end(self) -> None:
         super()._on_training_end()
-        # Finalize training for all trackers
-        self._occupancy_tracker.finalize_training()
-        self._request_tracker.finalize_training()
-        self._reward_tracker.finalize_training()
-        self._price_tracker.finalize_training()
-        self._acceptance_rate_tracker.finalize_training()
+        self._metrics.finalize()
 
     # ------------------------------- RECORD EVAL ARTIFACT STEP -------------------------------
     def _record_eval_artifact_step(

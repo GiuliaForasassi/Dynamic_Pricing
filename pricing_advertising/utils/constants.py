@@ -82,5 +82,3 @@ LOGISTIC_ACCEPTANCE_STDS = {
 # Observation space parameters
 WINDOW_SIZE = 30
 NUM_WINDOWS = 12
-
-# BASE_INTENSITY = 0.20

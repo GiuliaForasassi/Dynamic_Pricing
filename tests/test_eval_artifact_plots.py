@@ -5,7 +5,10 @@ import numpy as np
 import pytest
 
 from pricing_advertising.plots import eval_artifact_plots as plots
-from pricing_advertising.plots.eval_artifact_plots import build_snapshot_metrics
+from pricing_advertising.plots.eval_artifact_plots import (
+    _proposed_price_series,
+    build_snapshot_metrics,
+)
 
 
 @pytest.mark.parametrize("stored_seasons", [False, True])
@@ -146,10 +149,11 @@ def test_plot_dates_follow_snapshots_and_labels_distinguish_nights(
 
     proposed_paths = [path for path in logged if path.startswith("proposed_price_by_advance/")]
     assert [path.split("/")[1] for path in proposed_paths] == snapshot_dates
-    assert len(logged) == (8 + 2 * int(with_history)) * len(snapshot_dates)
+    assert len(logged) == (7 + 2 * int(with_history)) * len(snapshot_dates)
+    assert not any(path.startswith("request_plots/") for path in logged)
     for path, ylabel in logged.items():
         folder = path.split("/")[0]
-        if folder in {"request_plots", "confirmation_rate_plots"}:
+        if folder == "confirmation_rate_plots":
             assert "originally requested night" in ylabel
         elif folder in {"booked_price_plots", "price_acceptance_plots", "occupancy_plots"}:
             assert "offered nights" in ylabel
@@ -279,14 +283,15 @@ def test_all_plots_exclude_other_request_days(
 
     plots.log_eval_artifact_plots(artifact)
 
-    assert len(logged) == 10
+    assert len(logged) == 9
+    assert "request_plots" not in logged
+    np.testing.assert_array_equal(build_snapshot_metrics(steps, steps[1])["requests"], [1, 1])
     proposed = logged["proposed_price_by_advance"]
-    np.testing.assert_array_equal(proposed.axes[0].lines[0].get_xdata(), [2, 3])
-    np.testing.assert_array_equal(proposed.axes[0].lines[0].get_ydata(), [180, 200])
+    np.testing.assert_array_equal(proposed.axes[0].lines[0].get_xdata(), [0])
+    np.testing.assert_array_equal(proposed.axes[0].lines[0].get_ydata(), [200])
     for panel in proposed.axes[1:]:
         assert np.isnan(panel.lines[0].get_ydata()).all()
     expected = {
-        "request_plots": [1, 1],
         "confirmation_rate_plots": [1, 1],
         "price_acceptance_plots": [1, 1],
         "occupancy_plots": [100 / 30, 100 / 30],
@@ -306,7 +311,8 @@ def test_all_plots_exclude_other_request_days(
     for folder, fig in logged.items():
         for panel in fig.axes:
             assert panel.lines, folder
-            assert not panel.collections, folder
+            if folder != "proposed_price_by_advance":
+                assert not panel.collections, folder
             assert not panel.images, folder
             assert not panel.containers, folder
             assert all(line.get_linestyle() != "None" for line in panel.lines), folder
@@ -400,25 +406,29 @@ def test_price_lines_deduplicate_nights_per_category(monkeypatch, num_days, with
         prices = np.concatenate([line.get_ydata() for line in panel.lines])
         days = np.concatenate([line.get_xdata() for line in panel.lines])
         np.testing.assert_array_equal(prices, expected[category])
-        np.testing.assert_array_equal(days, [num_days if category == 1 else 1] * len(prices))
+        np.testing.assert_array_equal(days, [num_days - 1 if category == 1 else 0] * len(prices))
         assert len(panel.lines) == 1
-        assert panel.get_xlim() == (1, max(2, num_days))
-        assert not panel.collections
+        max_advance = num_days - 1 if with_bookings else 0
+        assert panel.get_xlim() == (-0.5, max(1, max_advance) + 0.5)
+        if with_bookings:
+            assert len(panel.collections) == 1
+            count = [4, 2, 1][category]
+            np.testing.assert_array_equal(
+                panel.collections[0].get_offsets(),
+                [[num_days - 1 if category == 1 else 0, expected[category][0]]] * count,
+            )
+        else:
+            assert not panel.collections
     assert not plots.plt.fignum_exists(fig.number)
     assert artifact == original
 
 
 @pytest.mark.parametrize(
-    ("snapshot_day", "first_day"),
-    [
-        (date(2025, 2, 28), 59),
-        (date(2025, 5, 15), 135),
-        (date(2025, 8, 1), 213),
-        (date(2025, 11, 12), 316),
-    ],
+    "snapshot_day",
+    [date(2025, 2, 28), date(2025, 5, 15), date(2025, 8, 1), date(2025, 11, 12)],
 )
-def test_real_price_lines_start_at_snapshot_index(
-    monkeypatch: pytest.MonkeyPatch, snapshot_day: date, first_day: int
+def test_proposed_price_lines_use_check_in_advance_and_full_stay_mean(
+    monkeypatch: pytest.MonkeyPatch, snapshot_day: date
 ) -> None:
     start = date(2025, 1, 1)
     end = date(2025, 12, 31)
@@ -455,17 +465,16 @@ def test_real_price_lines_start_at_snapshot_index(
     panels = logged[0].axes
     assert len(panels) == 3
     assert len(panels[0].lines) == 1
-    np.testing.assert_array_equal(
-        panels[0].lines[0].get_xdata(), [first_day, first_day + 1, first_day + 4]
-    )
-    np.testing.assert_array_equal(panels[0].lines[0].get_ydata(), [100, 120, 300])
-    np.testing.assert_array_equal(panels[1].lines[0].get_xdata(), [365])
-    np.testing.assert_array_equal(panels[1].lines[0].get_ydata(), [400])
+    np.testing.assert_array_equal(panels[0].lines[0].get_xdata(), [0, 4])
+    np.testing.assert_array_equal(panels[0].lines[0].get_ydata(), [110, 300])
+    last_advance = (end - snapshot_day).days
+    np.testing.assert_array_equal(panels[1].lines[0].get_xdata(), [last_advance])
+    np.testing.assert_array_equal(panels[1].lines[0].get_ydata(), [699.5])
     for panel in panels:
         assert len(panel.lines) == 1
-        assert panel.get_xlim() == (first_day, 365)
-        assert "Mean" not in panel.get_ylabel()
-    assert panels[-1].get_xlabel() == "Stay day (1 = simulation start)"
+        assert panel.get_xlim() == (-0.5, last_advance + 0.5)
+        assert panel.get_ylabel() == "Offered mean nightly price"
+    assert panels[-1].get_xlabel() == "Advance (days from request to offered check-in)"
 
 
 @pytest.mark.parametrize("confirmed_only", [False, True])
@@ -488,6 +497,107 @@ def test_conflicting_nightly_prices_are_rejected(confirmed_only: bool) -> None:
             date(2025, 12, 31),
             confirmed_only=confirmed_only,
         )
+
+
+def test_proposed_price_line_aggregates_offer_means_by_offered_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_day = date(2024, 2, 28)
+    requests = [
+        make_request("2024-02-28", "2024-03-10", 1, [80], accepted=False, confirmed=False),
+        make_request("2024-02-28", "2024-02-29", 2, [50, 150]),
+        make_request("2024-02-28", "2024-02-29", 1, [100]),
+        make_request("2024-02-28", "2024-02-29", 3, [400, 400, 400]),
+        make_request(
+            "2024-02-28", "2024-02-29", 1, None, valid=False, accepted=False, confirmed=False
+        ),
+        make_request("2024-02-28", "2024-03-01", 2, [200, 300], category=2),
+    ]
+    requests[-1]["requested"] = make_request("2024-02-28", "2024-02-29", 1, None)
+    requests[-1]["offer_attempts"] = [make_request("2024-02-28", "2024-02-29", 1, [999])]
+    artifact = {
+        "steps": [
+            {
+                "start_simulation": "2024-01-01",
+                "end_simulation": "2024-02-28",
+                "request_day": str(snapshot_day),
+                "requests": requests,
+            },
+            {
+                "request_day": "2024-02-27",
+                "requests": [make_request("2024-02-27", "2024-02-29", 1, [9999])],
+            },
+        ],
+        "checkpoint_timesteps": 800,
+        "env_index": 0,
+        "episode_id": 0,
+    }
+    original = deepcopy(artifact)
+    logged = {}
+    monkeypatch.setattr(plots.mlflow, "log_figure", lambda fig, path: logged.update({path: fig}))
+
+    plots.log_proposed_price_by_advance(artifact, [snapshot_day, snapshot_day])
+
+    assert len(logged) == 1
+    fig = logged["proposed_price_by_advance/2024-02-28/00000800_timesteps/env_00/episode_00000.png"]
+    np.testing.assert_array_equal(fig.axes[0].lines[0].get_xdata(), [1, 11])
+    np.testing.assert_array_equal(fig.axes[0].lines[0].get_ydata(), [100, 80])
+    np.testing.assert_array_equal(fig.axes[1].lines[0].get_xdata(), [2])
+    np.testing.assert_array_equal(fig.axes[1].lines[0].get_ydata(), [250])
+    np.testing.assert_array_equal(
+        fig.axes[0].collections[0].get_offsets(), [[1, 100], [1, 100], [1, 400], [11, 80]]
+    )
+    np.testing.assert_array_equal(fig.axes[1].collections[0].get_offsets(), [[2, 250]])
+    assert any(text.get_text() == "No observed offers" for text in fig.axes[2].texts)
+    assert not fig.axes[2].collections
+    for panel in fig.axes[:2]:
+        assert len(panel.lines) == 1
+        assert panel.lines[0].get_linestyle() == "-"
+        assert panel.lines[0].get_marker() == "o"
+        assert len(panel.collections) == 1
+        assert panel.collections[0].get_label() == "Individual offers"
+        assert panel.lines[0].get_label() == "Median by advance"
+        assert panel.get_legend() is not None
+    assert any("Lines connect observations" in text.get_text() for text in fig.texts)
+    assert not plots.plt.fignum_exists(fig.number)
+    assert artifact == original
+
+
+@pytest.mark.parametrize(
+    ("prices", "stay"),
+    [(None, 1), ([], 0), ([100], 2), ([[100]], 1), ([np.nan], 1), ([np.inf], 1)],
+)
+def test_proposed_prices_reject_invalid_nightly_prices(
+    prices: list[float] | list[list[int]] | None, stay: int
+) -> None:
+    steps = [
+        {
+            "request_day": "2025-02-28",
+            "requests": [make_request("2025-02-28", "2025-03-01", stay, prices)],
+        }
+    ]
+    with pytest.raises(ValueError, match="one finite price per stay night"):
+        _proposed_price_series(steps, date(2025, 2, 28))
+
+
+@pytest.mark.parametrize(
+    ("request_date", "check_in", "message"),
+    [
+        ("2025-02-27", "2025-03-01", "Request associated with the wrong day"),
+        ("2025-02-28", "2025-02-27", "Offered check-in precedes the request date"),
+    ],
+)
+def test_proposed_prices_reject_inconsistent_dates(
+    request_date: str, check_in: str, message: str
+) -> None:
+    steps = [
+        {
+            "request_day": "2025-02-28",
+            "requests": [make_request(request_date, check_in, 1, [100])],
+        }
+    ]
+    with pytest.raises(ValueError, match=message):
+        _proposed_price_series(steps, date(2025, 2, 28))
 
 
 def make_request(

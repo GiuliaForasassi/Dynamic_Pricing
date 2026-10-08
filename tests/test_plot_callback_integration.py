@@ -3,6 +3,7 @@ from copy import deepcopy
 from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
+from typing import TypedDict
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -22,10 +23,41 @@ START = date(2025, 12, 30)
 END = date(2025, 12, 31)
 
 
+class PPOOverrides(TypedDict, total=False):
+    run_name: str
+    batch_size: int
+    ent_coef: float
+    gae_lambda: float
+    clip_range: float
+    net_arch: list[int] | dict[str, list[int]]
+
+
 @pytest.mark.parametrize("allow_category", [False, True])
 @pytest.mark.parametrize("allow_period", [False, True])
+@pytest.mark.parametrize(
+    "ppo_kwargs",
+    [
+        {},
+        dict(
+            run_name="PPO_custom_test",
+            batch_size=2,
+            ent_coef=0.01,
+            gae_lambda=0.9,
+            clip_range=0.1,
+            net_arch=[16, 16],
+        ),
+        dict(
+            batch_size=2,
+            ent_coef=0.005,
+            gae_lambda=0.98,
+            clip_range=0.3,
+            net_arch=dict(pi=[16, 8], vf=[32, 16]),
+        ),
+    ],
+    ids=["ppo-defaults", "symmetric-network", "separate-networks"],
+)
 def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
-    make_env, monkeypatch, tmp_path, allow_category, allow_period
+    make_env, monkeypatch, tmp_path, allow_category, allow_period, ppo_kwargs: PPOOverrides
 ):
     from pricing_advertising.training import ppo_training as training_module
 
@@ -79,8 +111,12 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
         avg_num_requests=5,
         allow_category_alternative=allow_category,
         allow_period_alternative=allow_period,
+        **ppo_kwargs,
     )
     assert mean_reward == 600.0
+    mlflow.start_run.assert_called_once_with(
+        run_name=ppo_kwargs.get("run_name", "PPO_vec_normalize")
+    )
     training, evaluation = normalizers
     assert training.gamma == evaluation.gamma == 0.995
     assert training.norm_obs is evaluation.norm_obs is False
@@ -104,6 +140,13 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     ):
         assert (output / filename).is_file()
     restored_model = PPO.load(output / "final_model.zip", device="cpu")
+    assert restored_model.batch_size == ppo_kwargs.get("batch_size", 64)
+    assert restored_model.ent_coef == ppo_kwargs.get("ent_coef", 0.0)
+    assert restored_model.gae_lambda == ppo_kwargs.get("gae_lambda", 0.95)
+    assert restored_model.clip_range(1.0) == ppo_kwargs.get("clip_range", 0.2)
+    assert restored_model.policy.net_arch == ppo_kwargs.get(
+        "net_arch", dict(pi=[64, 64], vf=[64, 64])
+    )
     assert restored_model.observation_space["calendar"].shape == (2,)
     actions, _ = restored_model.predict(training.get_original_obs(), deterministic=True)
     assert actions.shape == (1, 3, 2, 4)
@@ -113,6 +156,14 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
         logged_params.update(call.args[0])
     assert logged_params["allow_category_alternative"] is allow_category
     assert logged_params["allow_period_alternative"] is allow_period
+    for name, default in (
+        ("batch_size", 64),
+        ("ent_coef", 0.0),
+        ("gae_lambda", 0.95),
+        ("clip_range", 0.2),
+    ):
+        assert logged_params[name] == ppo_kwargs.get(name, default)
+    assert logged_params["net_arch"] == str(restored_model.policy.net_arch)
 
 
 def test_vecnormalize_preserves_euro_metrics_and_best_checkpoint(
@@ -493,7 +544,8 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
         model.num_timesteps = 2
         assert callback.on_step()
         assert len(artifacts) == 2
-        assert len(figures) == 20
+        assert len(figures) == 18
+        assert not any(path.startswith("request_plots/") for path in figures)
 
         for episode in range(2):
             suffix = f"00000002_timesteps/env_00/episode_{episode:05d}"
@@ -507,11 +559,18 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
                 fig = figures[f"{folder}/{END}/{suffix}.png"]
                 assert len(fig.axes) == 3
                 assert all(len(panel.lines) == 1 for panel in fig.axes)
-                np.testing.assert_array_equal(fig.axes[0].lines[0].get_xdata(), [3])
+                expected_x = [1] if folder == "proposed_price_by_advance" else [3]
+                np.testing.assert_array_equal(fig.axes[0].lines[0].get_xdata(), expected_x)
                 np.testing.assert_array_equal(fig.axes[0].lines[0].get_ydata(), [200])
                 assert all(panel.lines[0].get_ydata().size == 0 for panel in fig.axes[1:])
+                if folder == "proposed_price_by_advance":
+                    np.testing.assert_array_equal(
+                        fig.axes[0].collections[0].get_offsets(), [[1, 200], [1, 200]]
+                    )
+                    assert all(not panel.collections for panel in fig.axes[1:])
+                else:
+                    assert all(not panel.collections for panel in fig.axes)
             for folder, expected in (
-                ("request_plots", [0, 2]),
                 ("confirmation_rate_plots", [np.nan, 1]),
                 ("price_acceptance_plots", [np.nan, 1]),
                 ("occupancy_plots", [0, 100 * 2 / 6]),
@@ -540,10 +599,11 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
                     np.testing.assert_array_equal(
                         line.get_ydata(), snapshot["policy_coefficients"][category_idx][season]
                     )
-        for fig in figures.values():
+        for path, fig in figures.items():
             for panel in fig.axes:
                 assert panel.lines
-                assert not panel.collections
+                if not path.startswith("proposed_price_by_advance/"):
+                    assert not panel.collections
                 assert not panel.images
                 assert not panel.containers
                 assert all(line.get_linestyle() != "None" for line in panel.lines)

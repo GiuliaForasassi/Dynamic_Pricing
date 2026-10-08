@@ -58,6 +58,13 @@ def run_simulation(
     | None = None,  # List of dates for which to plot price requests
     allow_category_alternative: bool = True,
     allow_period_alternative: bool = True,
+    # ---------- Additional PPO hyperparameters ----------
+    batch_size: int = 64,
+    ent_coef: float = 0.0,
+    gae_lambda: float = 0.95,
+    clip_range: float = 0.2,
+    net_arch: list[int] | dict[str, list[int]] | None = None,
+    run_name: str = "PPO_vec_normalize",
 ) -> float:
     # --------- Checks ----------------
     if n_envs <= 0:
@@ -84,7 +91,7 @@ def run_simulation(
 
     # ------------ MLFLOW SETUP ------------
     mlflow.set_experiment("PricingEnv_Simulation")
-    with mlflow.start_run(run_name="PPO_vec_normalize") as run:
+    with mlflow.start_run(run_name=run_name) as run:
         # Define the output directory for saving final model, best model and evaluation logs
         output_dir = Path("models") / "vec_normalize" / run.info.run_id
         best_model_dir = output_dir / "best_model"
@@ -112,6 +119,10 @@ def run_simulation(
                 "n_epochs": n_epochs,
                 "learning_rate": learning_rate,
                 "gamma": gamma,
+                "batch_size": batch_size,
+                "ent_coef": ent_coef,
+                "gae_lambda": gae_lambda,
+                "clip_range": clip_range,
                 "eval_episodes": eval_episodes,
                 "seed": seed,
                 "start_simulation": start_simulation,
@@ -207,8 +218,14 @@ def run_simulation(
             gamma=gamma,
             n_epochs=n_epochs,
             n_steps=n_steps,
+            batch_size=batch_size,
+            ent_coef=ent_coef,
+            gae_lambda=gae_lambda,
+            clip_range=clip_range,
+            policy_kwargs={"net_arch": net_arch} if net_arch is not None else None,
             seed=seed,
         )
+        mlflow.log_params({"net_arch": str(model.policy.net_arch)})
         model.set_logger(logger)
 
         # ------------ Callback custom for plots ------------------
