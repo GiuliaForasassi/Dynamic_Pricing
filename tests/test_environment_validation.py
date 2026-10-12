@@ -98,6 +98,9 @@ def test_external_generator_is_precomputed(make_env):
         env.end_simulation,
         env.extended_end_simulation,
         env.seasonality_array,
+        num_category1_rooms=1,
+        num_category2_rooms=1,
+        num_category3_rooms=1,
         seed=42,
         precompute=False,
     )

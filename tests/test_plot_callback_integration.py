@@ -544,7 +544,7 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
         model.num_timesteps = 2
         assert callback.on_step()
         assert len(artifacts) == 2
-        assert len(figures) == 18
+        assert len(figures) == 16
         assert not any(path.startswith("request_plots/") for path in figures)
 
         for episode in range(2):
@@ -570,21 +570,29 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
                     assert all(not panel.collections for panel in fig.axes[1:])
                 else:
                     assert all(not panel.collections for panel in fig.axes)
-            for folder, expected in (
-                ("confirmation_rate_plots", [np.nan, 1]),
-                ("price_acceptance_plots", [np.nan, 1]),
-                ("occupancy_plots", [0, 100 * 2 / 6]),
-            ):
+            for folder in ("confirmation_rate_plots", "price_acceptance_plots"):
+                fig = figures[f"{folder}/{END}/{suffix}.png"]
+                np.testing.assert_array_equal(fig.axes[0].collections[0].get_offsets(), [[3, 1]])
+            for folder, expected in (("occupancy_plots", [0, 100 * 2 / 6]),):
                 fig = figures[f"{folder}/{END}/{suffix}.png"]
                 np.testing.assert_allclose(fig.axes[0].lines[0].get_ydata(), expected)
-            for folder in ("bar_by_advance", "bar_by_advance_next_60_days"):
+            for folder in ("bar_by_advance",):
                 fig = figures[f"{folder}/{END}/{suffix}.png"]
-                for category_idx, expected in enumerate((100, 0, 0)):
+                for category_idx in range(3):
+                    before = np.asarray(snapshot["bar_levels_before_update"][category_idx])
+                    after = np.asarray(snapshot["bar_levels_by_category"][category_idx])
+                    increased_advance = np.flatnonzero(after > before)
                     np.testing.assert_array_equal(
-                        fig.axes[1].lines[category_idx].get_ydata(), [0, expected]
+                        fig.axes[1].collections[category_idx].get_offsets(),
+                        np.column_stack(
+                            (
+                                increased_advance,
+                                np.full(len(increased_advance), category_idx + 1),
+                            )
+                        ),
                     )
                     np.testing.assert_array_equal(
-                        fig.axes[0].lines[2 * category_idx].get_ydata(),
+                        fig.axes[0].lines[category_idx].get_ydata(),
                         snapshot["bar_levels_by_category"][category_idx],
                     )
             fig = figures[f"bar_price_plots/{END}/{suffix}.png"]
@@ -594,16 +602,30 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
                 )
             fig = figures[f"policy_diagnostics/{END}/{suffix}.png"]
             for category_idx, panel in enumerate(fig.axes[::3]):
-                assert len(panel.lines) == 2
-                for season, line in enumerate(panel.lines):
+                assert len(panel.containers) == 2
+                for season, container in enumerate(panel.containers):
                     np.testing.assert_array_equal(
-                        line.get_ydata(), snapshot["policy_coefficients"][category_idx][season]
+                        [bar.get_height() for bar in container],
+                        snapshot["policy_coefficients"][category_idx][season],
                     )
         for path, fig in figures.items():
             for panel in fig.axes:
-                assert panel.lines
-                if not path.startswith("proposed_price_by_advance/"):
-                    assert not panel.collections
+                if path.startswith("policy_diagnostics/") and any(
+                    panel is axis for axis in fig.axes[::3]
+                ):
+                    assert panel.containers
+                    assert not panel.lines
+                    continue
+                if path.startswith("bar_by_advance/") and (panel is fig.axes[1]):
+                    assert not panel.lines
+                    assert len(panel.collections) == 3
+                elif path.startswith(("confirmation_rate_plots/", "price_acceptance_plots/")):
+                    assert not panel.lines
+                    assert len(panel.collections) == 1
+                else:
+                    assert panel.lines
+                    if not path.startswith("proposed_price_by_advance/"):
+                        assert not panel.collections
                 assert not panel.images
                 assert not panel.containers
                 assert all(line.get_linestyle() != "None" for line in panel.lines)

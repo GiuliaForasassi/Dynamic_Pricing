@@ -3,7 +3,7 @@ from calendar import isleap
 from collections import Counter
 from copy import deepcopy
 from datetime import date, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import gymnasium as gym
 import numpy as np
@@ -22,7 +22,10 @@ from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.requests.request import HotelOffer, Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
+    BOOKING_WINDOW,
     HIGH_SEASON,
+    LOGISTIC_ACCEPTANCE_ADVANCE_MAX,
+    LOGISTIC_ACCEPTANCE_ADVANCE_MIN,
     LOGISTIC_ACCEPTANCE_AVG_PRICES,
     LOGISTIC_ACCEPTANCE_BETA,
     LOGISTIC_ACCEPTANCE_HIGH_SEASON_MULTIPLIERS,
@@ -52,7 +55,13 @@ class PricingEnv(gym.Env):
         | None = None,  # The dates for which to collect artifacts
         allow_category_alternative: bool = True,
         allow_period_alternative: bool = True,
+        # Baselines only: "never"/"always" force the BAR increment probability to 0/1 and
+        # ignore the action; None keeps the policy-driven probabilities.
+        bar_update_mode: Literal["never", "always"] | None = None,
     ) -> None:
+        if bar_update_mode not in (None, "never", "always"):
+            raise ValueError("bar_update_mode must be None, 'never' or 'always'.")
+
         # Validate the simulation period
         if start_simulation > end_simulation:
             raise ValueError(
@@ -89,6 +98,7 @@ class PricingEnv(gym.Env):
             raise ValueError("Total hotel capacity must be positive.")
         self.allow_category_alternative = allow_category_alternative
         self.allow_period_alternative = allow_period_alternative
+        self.bar_update_mode = bar_update_mode
 
         self.collect_eval_artifacts = collect_eval_artifacts
         self.artifact_snapshot_dates = set(artifact_snapshot_dates or [])
@@ -181,6 +191,9 @@ class PricingEnv(gym.Env):
             end_simulation,
             extended_end_simulation=self.extended_end_simulation,
             seasonality_array=self.seasonality_array,
+            num_category1_rooms=self.hotel.get_num_rooms_per_category(RoomCategory.CATEGORY1),
+            num_category2_rooms=self.hotel.get_num_rooms_per_category(RoomCategory.CATEGORY2),
+            num_category3_rooms=self.hotel.get_num_rooms_per_category(RoomCategory.CATEGORY3),
             seed=seed,
             precompute=True,  # Always precompute requests at the beginning
         )
@@ -188,12 +201,15 @@ class PricingEnv(gym.Env):
         if request_generator is not None:
             self.request_generator.ensure_precomputed()
 
-        # Logistic acceptance model: the probability that a client accepts depends on how much the offered price deviates from the average expected price
+        # Logistic acceptance model: the probability that a client accepts depends on how much the offered price deviates from the reference price (category, seasonality, advance)
         self.acceptance_model = acceptance_model or LogisticAcceptanceModel(
             beta=LOGISTIC_ACCEPTANCE_BETA,
             avg_prices=LOGISTIC_ACCEPTANCE_AVG_PRICES,
             st_deviations=LOGISTIC_ACCEPTANCE_STDS,
             high_season_multipliers=LOGISTIC_ACCEPTANCE_HIGH_SEASON_MULTIPLIERS,
+            advance_max=LOGISTIC_ACCEPTANCE_ADVANCE_MAX,
+            advance_min=LOGISTIC_ACCEPTANCE_ADVANCE_MIN,
+            booking_window=BOOKING_WINDOW,
         )
         self.acceptance_model.rng = self.acceptance_rng
 
@@ -515,6 +531,8 @@ class PricingEnv(gym.Env):
                 point["occupancy_after"] = self.occupancy[:, stay_index].tolist()
             payload["bar_history"] = bar_history
             payload["max_bar_level"] = int(self._max_bar_level)
+            if self.bar_update_mode is not None:
+                payload["bar_update_mode"] = self.bar_update_mode
             _, booking_stop = self._booking_window_indices()
             payload["bar_update_end_day"] = (
                 self.start_simulation + timedelta(days=booking_stop)
@@ -789,6 +807,8 @@ class PricingEnv(gym.Env):
         actions = self._validate_action(actions)
         tomorrow_idx, stop_idx = self._booking_window_indices()
         occupancy = self.occupancy[:, tomorrow_idx:stop_idx]
+        if self.bar_update_mode is not None:
+            return np.full(occupancy.shape, float(self.bar_update_mode == "always"))
         seasons = self.seasonality_array[tomorrow_idx:stop_idx]
         probabilities = np.zeros(occupancy.shape, dtype=float)
         for cat_idx, category in enumerate(RoomCategory):

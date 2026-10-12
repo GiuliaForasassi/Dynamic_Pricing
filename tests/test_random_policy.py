@@ -16,15 +16,15 @@ from pricing_advertising.plots import (
     reward_tracker,
 )
 from pricing_advertising.pricing_model import bar_table
-from pricing_advertising.training import random_policy
+from pricing_advertising.training import baseline_evaluation, random_policy
 
 
 @pytest.fixture
 def simulation(monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(bar_table, "BAR_TABLE", {})
     bar_table.set_bar_table_from_csv(Path(__file__).parents[1] / "data/bar_table.csv")
-    monkeypatch.setattr(random_policy, "mlflow", MagicMock())
-    monkeypatch.setattr(random_policy, "log_eval_artifact_plots", MagicMock())
+    monkeypatch.setattr(baseline_evaluation, "mlflow", MagicMock())
+    monkeypatch.setattr(baseline_evaluation, "log_eval_artifact_plots", MagicMock())
     for module in (
         acceptance_rate_tracker,
         occupancy_tracker,
@@ -32,7 +32,7 @@ def simulation(monkeypatch: pytest.MonkeyPatch) -> dict:
         request_tracker,
         reward_tracker,
     ):
-        monkeypatch.setattr(module, "mlflow", random_policy.mlflow)
+        monkeypatch.setattr(module, "mlflow", baseline_evaluation.mlflow)
     return {
         "seed": 42,
         "eval_seed": 10_042,
@@ -74,8 +74,10 @@ def test_random_policy_samples_reproducible_uniform_actions() -> None:
 
 def test_simulation_logs_raw_rewards_and_complete_episodes(simulation: dict) -> None:
     mean = random_policy.run_random_policy_simulation(**simulation)
-    random_policy.mlflow.start_run.assert_called_once_with(run_name="Random_uniform")
-    artifacts = [call.args[0] for call in random_policy.log_eval_artifact_plots.call_args_list]
+    baseline_evaluation.mlflow.start_run.assert_called_once_with(run_name="Random_uniform")
+    artifacts = [
+        call.args[0] for call in baseline_evaluation.log_eval_artifact_plots.call_args_list
+    ]
     assert len(artifacts) == 2
     rewards = []
     for episode_id, artifact in enumerate(artifacts):
@@ -90,9 +92,11 @@ def test_simulation_logs_raw_rewards_and_complete_episodes(simulation: dict) -> 
         ]
         rewards.append(sum(step["step_reward"] for step in artifact["steps"]))
     assert mean == np.mean(rewards)
-    random_policy.mlflow.log_metric.assert_any_call("final_eval_mean_reward", mean)
-    random_policy.mlflow.log_metric.assert_any_call("final_eval_std_reward", float(np.std(rewards)))
-    random_policy.mlflow.log_dict.assert_any_call(
+    baseline_evaluation.mlflow.log_metric.assert_any_call("final_eval_mean_reward", mean)
+    baseline_evaluation.mlflow.log_metric.assert_any_call(
+        "final_eval_std_reward", float(np.std(rewards))
+    )
+    baseline_evaluation.mlflow.log_dict.assert_any_call(
         {
             "seed": 42,
             "eval_request_seed": 10_042,
@@ -101,20 +105,22 @@ def test_simulation_logs_raw_rewards_and_complete_episodes(simulation: dict) -> 
         },
         "eval_data/results.json",
     )
-    params = random_policy.mlflow.log_params.call_args.args[0]
+    params = baseline_evaluation.mlflow.log_params.call_args.args[0]
+    assert params["model"] == "Random"
+    assert "bar_update_mode" not in params
     assert params["training_duration"] == 0
     assert params["eval_norm_reward"] is False
     assert params["allow_category_alternative"] is False
     assert params["allow_period_alternative"] is False
     assert random_policy.run_random_policy_simulation(**simulation) == mean
-    assert random_policy.log_eval_artifact_plots.call_args_list[2].args[0] == artifacts[0]
+    assert baseline_evaluation.log_eval_artifact_plots.call_args_list[2].args[0] == artifacts[0]
 
 
 def test_action_seed_does_not_change_request_scenario(simulation: dict) -> None:
     random_policy.run_random_policy_simulation(**simulation)
-    first = random_policy.log_eval_artifact_plots.call_args_list[0].args[0]["steps"]
+    first = baseline_evaluation.log_eval_artifact_plots.call_args_list[0].args[0]["steps"]
     random_policy.run_random_policy_simulation(**{**simulation, "seed": 43})
-    second = random_policy.log_eval_artifact_plots.call_args_list[2].args[0]["steps"]
+    second = baseline_evaluation.log_eval_artifact_plots.call_args_list[2].args[0]["steps"]
     assert first[0]["policy_coefficients"] != second[0]["policy_coefficients"]
     assert [[r["requested"] for r in step["requests"]] for step in first] == [
         [r["requested"] for r in step["requests"]] for step in second
@@ -124,11 +130,11 @@ def test_action_seed_does_not_change_request_scenario(simulation: dict) -> None:
 def test_simulation_keeps_requests_and_advances_rngs(
     simulation: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    reset = random_policy.PricingEnv.reset
+    reset = baseline_evaluation.PricingEnv.reset
     seeds = []
 
     def record_reset(
-        self: random_policy.PricingEnv,
+        self: baseline_evaluation.PricingEnv,
         *,
         seed: int | None = None,
         options: dict | None = None,
@@ -136,11 +142,11 @@ def test_simulation_keeps_requests_and_advances_rngs(
         seeds.append(seed)
         return reset(self, seed=seed, options=options)
 
-    monkeypatch.setattr(random_policy.PricingEnv, "reset", record_reset)
+    monkeypatch.setattr(baseline_evaluation.PricingEnv, "reset", record_reset)
     random_policy.run_random_policy_simulation(**simulation)
     assert seeds == [10_042, None]
     episodes = [
-        call.args[0]["steps"] for call in random_policy.log_eval_artifact_plots.call_args_list
+        call.args[0]["steps"] for call in baseline_evaluation.log_eval_artifact_plots.call_args_list
     ]
     assert episodes[0][0]["policy_coefficients"] != episodes[1][0]["policy_coefficients"]
     assert [[r["requested"] for r in step["requests"]] for step in episodes[0]] == [
@@ -153,12 +159,12 @@ def test_simulation_uses_existing_plot_helpers(
 ) -> None:
     from pricing_advertising.plots import eval_artifact_plots
 
-    monkeypatch.setattr(eval_artifact_plots, "mlflow", random_policy.mlflow)
+    monkeypatch.setattr(eval_artifact_plots, "mlflow", baseline_evaluation.mlflow)
     monkeypatch.setattr(
-        random_policy, "log_eval_artifact_plots", eval_artifact_plots.log_eval_artifact_plots
+        baseline_evaluation, "log_eval_artifact_plots", eval_artifact_plots.log_eval_artifact_plots
     )
     random_policy.run_random_policy_simulation(**{**simulation, "eval_episodes": 1})
-    assert random_policy.mlflow.log_figure.call_count > 0
+    assert baseline_evaluation.mlflow.log_figure.call_count > 0
 
 
 @pytest.mark.parametrize(
@@ -181,15 +187,15 @@ def test_invalid_configuration_fails_before_logging(
 ) -> None:
     with pytest.raises(ValueError, match="must"):
         random_policy.run_random_policy_simulation(**{**simulation, parameter: value})
-    random_policy.mlflow.start_run.assert_not_called()
+    baseline_evaluation.mlflow.start_run.assert_not_called()
 
 
 def test_simulation_closes_environment_on_error(
     simulation: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     close = MagicMock()
-    monkeypatch.setattr(random_policy.PricingEnv, "close", close)
-    random_policy.log_eval_artifact_plots.side_effect = RuntimeError("Plot failed")
+    monkeypatch.setattr(baseline_evaluation.PricingEnv, "close", close)
+    baseline_evaluation.log_eval_artifact_plots.side_effect = RuntimeError("Plot failed")
     with pytest.raises(RuntimeError, match="Plot failed"):
         random_policy.run_random_policy_simulation(**simulation)
     close.assert_called_once()
@@ -197,11 +203,13 @@ def test_simulation_closes_environment_on_error(
 
 def test_custom_run_name_preserves_rewards(simulation: dict) -> None:
     default_reward = random_policy.run_random_policy_simulation(**simulation)
-    random_policy.mlflow.start_run.reset_mock()
+    baseline_evaluation.mlflow.start_run.reset_mock()
     custom_reward = random_policy.run_random_policy_simulation(
         **simulation, run_name="Random_baseline_60_requests"
     )
-    random_policy.mlflow.start_run.assert_called_once_with(run_name="Random_baseline_60_requests")
+    baseline_evaluation.mlflow.start_run.assert_called_once_with(
+        run_name="Random_baseline_60_requests"
+    )
     assert custom_reward == default_reward
 
 
@@ -213,24 +221,24 @@ def _ratio(numerator: float, denominator: float) -> float:
 def test_tracker_metrics_match_episode_data(
     simulation: dict, monkeypatch: pytest.MonkeyPatch, episodes: int
 ) -> None:
-    step = random_policy.PricingEnv.step
+    step = baseline_evaluation.PricingEnv.step
     recorded = []
 
     def record_step(
-        self: random_policy.PricingEnv, action: np.ndarray
+        self: baseline_evaluation.PricingEnv, action: np.ndarray
     ) -> tuple[Any, float, bool, bool, dict[str, Any]]:
         result = step(self, action)
         recorded.append(deepcopy(result[4]["step_metrics"]))
         return result
 
-    monkeypatch.setattr(random_policy.PricingEnv, "step", record_step)
+    monkeypatch.setattr(baseline_evaluation.PricingEnv, "step", record_step)
     mean = random_policy.run_random_policy_simulation(
         **{**simulation, "eval_episodes": episodes, "price_plot_request_dates": []}
     )
     days = 3
     assert len(recorded) == days * episodes
     actual = {}
-    for call in random_policy.mlflow.log_metric.call_args_list:
+    for call in baseline_evaluation.mlflow.log_metric.call_args_list:
         key, value = call.args
         actual.setdefault(key, []).append((call.kwargs.get("step", 0), value))
     assert not any(key.endswith("/train") for key in actual)
@@ -297,7 +305,7 @@ def test_tracker_metrics_match_episode_data(
         np.testing.assert_allclose(
             actual[f"{name}/val"], list(enumerate(values, start=1)), equal_nan=True
         )
-    csv_paths = {call.args[1] for call in random_policy.mlflow.log_text.call_args_list}
+    csv_paths = {call.args[1] for call in baseline_evaluation.mlflow.log_text.call_args_list}
     assert csv_paths == {
         f"episodes/val/episode_{episode:05d}_{suffix}.csv"
         for episode in range(episodes)
@@ -309,8 +317,8 @@ def test_trackers_do_not_change_random_trajectory(
     simulation: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tracked_reward = random_policy.run_random_policy_simulation(**simulation)
-    tracked_artifacts = random_policy.log_eval_artifact_plots.call_args_list.copy()
-    random_policy.log_eval_artifact_plots.reset_mock()
-    monkeypatch.setattr(random_policy, "EpisodeMetrics", MagicMock())
+    tracked_artifacts = baseline_evaluation.log_eval_artifact_plots.call_args_list.copy()
+    baseline_evaluation.log_eval_artifact_plots.reset_mock()
+    monkeypatch.setattr(baseline_evaluation, "EpisodeMetrics", MagicMock())
     assert random_policy.run_random_policy_simulation(**simulation) == tracked_reward
-    assert random_policy.log_eval_artifact_plots.call_args_list == tracked_artifacts
+    assert baseline_evaluation.log_eval_artifact_plots.call_args_list == tracked_artifacts

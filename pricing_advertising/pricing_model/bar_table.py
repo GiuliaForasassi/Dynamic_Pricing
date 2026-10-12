@@ -140,6 +140,10 @@ def n_levels() -> int:
     return len(next(iter(BAR_TABLE.values()))) if BAR_TABLE else 0
 
 
+def max_price() -> float:
+    return max((max(prices) for prices in BAR_TABLE.values()), default=0.0)
+
+
 def get_price(room_type: str, level: int) -> float:
     prices = BAR_TABLE[RoomCategory[room_type]]
     bar_level = max(0, min(level, len(prices) - 1))

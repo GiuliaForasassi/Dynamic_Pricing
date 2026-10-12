@@ -8,6 +8,7 @@ import mlflow
 import numpy as np
 from matplotlib.ticker import MaxNLocator
 
+from pricing_advertising.pricing_model.bar_table import max_price
 from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.utils.constants import HIGH_SEASON
 
@@ -189,6 +190,10 @@ def _bar_increment_probabilities(
     snapshot: dict[str, Any], occupancy_before: np.ndarray, rooms: np.ndarray
 ) -> np.ndarray:
     probabilities = np.full(occupancy_before.shape, np.nan, dtype=float)
+    if "bar_update_mode" in snapshot:
+        forced = float(snapshot["bar_update_mode"] == "always")
+        probabilities[np.asarray(rooms) > 0] = forced
+        return probabilities
     for category_idx, theta in enumerate(snapshot.get("policy_coefficients", [])):
         if rooms[category_idx] > 0:
             coefficients = np.asarray(theta, dtype=float)
@@ -215,7 +220,8 @@ def _bar_increment_probabilities(
     return probabilities
 
 
-def log_bar_by_advance(artifact: dict[str, Any], *, show_bookings: bool = True) -> None:
+def log_bar_by_advance(artifact: dict[str, Any]) -> None:
+    """Plot updated BAR levels, actual increases by category, and probabilities against advance."""
     steps = artifact["steps"]
     checkpoint = int(artifact["checkpoint_timesteps"])
     env_idx = int(artifact["env_index"])
@@ -240,7 +246,7 @@ def log_bar_by_advance(artifact: dict[str, Any], *, show_bookings: bool = True) 
             1,
         )
         occupancy_before = _ratio(occupancy_after - daily_bookings, rooms[:, None])
-        booked_pct = _ratio(daily_bookings, rooms[:, None]) * 100
+        increased = levels > levels_before
         probabilities = _bar_increment_probabilities(snapshot, occupancy_before, rooms)
         max_level = int(snapshot["max_bar_level"])
         eligible = (levels_before < max_level) & (advance[None, :] > 0)
@@ -252,11 +258,8 @@ def log_bar_by_advance(artifact: dict[str, Any], *, show_bookings: bool = True) 
         effective_probabilities = np.where(eligible, probabilities, 0.0)
         horizon = int(advance[-1])
 
-        for folder, view, limit in (
-            ("bar_by_advance", "All future stay nights", max(1, horizon)),
-            ("bar_by_advance_next_60_days", "Next 60 days", 60),
-        ):
-            fig, (bar_ax, occupancy_ax, probability_ax) = plt.subplots(
+        for folder, view, limit in (("bar_by_advance", "All future stay nights", max(1, horizon)),):
+            fig, (bar_ax, increase_ax, probability_ax) = plt.subplots(
                 3, 1, figsize=(13, 10), sharex=True
             )
             try:
@@ -268,24 +271,14 @@ def log_bar_by_advance(artifact: dict[str, Any], *, show_bookings: bool = True) 
                         levels[category_idx],
                         where="mid",
                         color=color,
-                        label=f"{label}: after update",
+                        label=label,
                     )
-                    bar_ax.step(
-                        advance,
-                        levels_before[category_idx],
-                        where="mid",
+                    increase_ax.scatter(
+                        advance[increased[category_idx]],
+                        np.full(np.count_nonzero(increased[category_idx]), category_idx + 1),
                         color=color,
-                        linestyle="--",
-                        label=f"{label}: before update",
-                    )
-                    occupancy_ax.step(
-                        advance,
-                        booked_pct[category_idx],
-                        where="mid",
-                        color=color,
-                        marker="^" if show_bookings else None,
-                        markevery=np.flatnonzero(daily_bookings[category_idx] > 0).tolist(),
-                        markersize=3,
+                        s=18,
+                        zorder=3,
                     )
                     probability_ax.step(
                         advance,
@@ -311,7 +304,21 @@ def log_bar_by_advance(artifact: dict[str, Any], *, show_bookings: bool = True) 
                     title=f"Maximum BAR: {max_level}",
                 )
                 bar_ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-                occupancy_ax.set(ylabel="Occupancy added by today's bookings (%)", ylim=(-2, 106))
+                increase_ax.set(
+                    title="Actual BAR increases (+1)",
+                    yticks=np.arange(1, len(rooms) + 1),
+                    yticklabels=[f"Category {idx + 1}" for idx in range(len(rooms))],
+                    ylim=(len(rooms) + 0.5, 0.5),
+                )
+                if not increased[:, advance <= limit].any():
+                    increase_ax.text(
+                        0.5,
+                        0.5,
+                        "No BAR increases on this decision day",
+                        transform=increase_ax.transAxes,
+                        ha="center",
+                        va="center",
+                    )
                 probability_ax.set(
                     xlabel="Days from request date to stay night",
                     ylabel="BAR increment probability (%)",
@@ -327,7 +334,7 @@ def log_bar_by_advance(artifact: dict[str, Any], *, show_bookings: bool = True) 
                         transform=probability_ax.transAxes,
                         ha="center",
                     )
-                for panel in (bar_ax, occupancy_ax, probability_ax):
+                for panel in (bar_ax, increase_ax, probability_ax):
                     panel.grid(True, alpha=0.25)
                     if limit > horizon:
                         panel.axvspan(horizon + 0.5, limit + 0.5, color="0.92", zorder=0)
@@ -340,7 +347,7 @@ def log_bar_by_advance(artifact: dict[str, Any], *, show_bookings: bool = True) 
                 fig.text(
                     0.08,
                     0.025,
-                    "Occupancy shows only today's bookings; probabilities use hotel occupancy before today's bookings.\n",
+                    "Dots mark actual BAR increases; probabilities use hotel occupancy before today's bookings.\n",
                     fontsize=9,
                 )
                 fig.tight_layout(rect=(0, 0.07, 1, 0.93))
@@ -459,6 +466,7 @@ def build_snapshot_metrics(
     return {
         "day": np.arange(first_day, first_day + size),
         "requests": requests,  # Total number of requests received for each day in the snapshot period.
+        "offers": offers,
         "confirmed": confirmed,  # Total number of confirmed requests for each day in the snapshot period.
         "booked_revenue": revenue,
         "confirmation_rate": _ratio(
@@ -469,12 +477,18 @@ def build_snapshot_metrics(
         ),  # Ratio of accepted prices to total offers for each day in the snapshot period.
         "occupancy_pct": confirmed
         / rooms.sum()
-        * 100.0,  # Occupancy percentage for each day in the snapshot period.
+        * 100.0,  # Occupancy added by the bookings received only on the snapshot day.
+        # Total hotel occupancy after the snapshot day's bookings (all bookings made so far).
+        "total_occupancy_pct": occupancy.sum(axis=0) / rooms.sum() * 100.0,
         "bar_prices": bar_prices,  # BAR (Best Available Rate) prices for each day in the snapshot period.
         "booked_price_points": np.asarray(booked_price_points, dtype=float).reshape(
             -1, 3
         ),  # List of booked price points as (day, category, price) tuples.
     }
+
+
+# Rate metrics drawn as scatter, mapped to the count metric that sizes the markers.
+RATE_COUNT_KEYS = {"confirmation_rate": "requests", "price_acceptance_rate": "offers"}
 
 
 # ----------- LOG EVAL ARTIFACT PLOTS -----------
@@ -536,13 +550,13 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
             "confirmation_rate",
             "confirmation_rate_plots",
             "Confirmation rate (originally requested nights)\nConfirmed requests / all requests",
-            (0, 1),
+            (-0.05, 1.05),
         ),
         (
             "price_acceptance_rate",
             "price_acceptance_plots",
             "Price acceptance rate (offered nights)\nPrice-accepted offers / all offers",
-            (0, 1),
+            (-0.05, 1.05),
         ),
         (
             "occupancy_pct",
@@ -554,7 +568,7 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
             "bar_prices",
             "bar_price_plots",
             "Current BAR nightly price",
-            None,
+            (0, max_price() or None),
         ),
     ]
 
@@ -567,6 +581,7 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
         coefficients = np.asarray(snapshot["policy_coefficients"])
         before = np.asarray(snapshot["bar_levels_before_update"])
         after = np.asarray(snapshot["bar_levels_by_category"])
+        max_bar_level = int(snapshot["max_bar_level"]) if "max_bar_level" in snapshot else None
         occupancy_grid = np.linspace(0.0, 1.0, 101)
         fig, axes = plt.subplots(len(before), 3, figsize=(18, 4 * len(before)), squeeze=False)
         try:
@@ -577,25 +592,49 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
                     coefficients[category_idx] if seasonal else coefficients[category_idx][None, :]
                 )
                 labels = ("Low season", "High season") if seasonal else ("All seasons (legacy)",)
-                for theta, label in zip(curves, labels, strict=True):
-                    coefficient_ax.plot(np.arange(theta.size), theta, marker=".", label=label)
-                    model = BernsteinProbModel(theta if seasonal else theta[::-1])
+                bar_width = 0.8 / len(curves)
+                for series_idx, (theta, label) in enumerate(zip(curves, labels, strict=True)):
+                    # Coefficients are discrete: grouped bars, one group per index.
+                    offset = (series_idx - (len(curves) - 1) / 2) * bar_width
+                    bars = coefficient_ax.bar(
+                        np.arange(theta.size) + offset, theta, width=bar_width, label=label
+                    )
+                    coefficient_ax.bar_label(bars, fmt="%.2f", fontsize=7, padding=1)
+                    if "bar_update_mode" in snapshot:
+                        probabilities = np.full_like(
+                            occupancy_grid, float(snapshot["bar_update_mode"] == "always")
+                        )
+                    else:
+                        model = BernsteinProbModel(theta if seasonal else theta[::-1])
+                        probabilities = model.predict_increment_probs(occupancy_grid)
                     probability_ax.plot(
                         occupancy_grid * 100,
-                        model.predict_increment_probs(occupancy_grid),
+                        probabilities,
                         label=label,
                     )
-                coefficient_ax.legend()
+                coefficient_ax.legend(loc="upper center", ncol=len(curves), fontsize=8)
                 probability_ax.legend()
                 coefficient_ax.set(
-                    xlabel="Coefficient index",
+                    xlabel="Coefficient",
                     ylabel="Coefficient for today's decision",
-                    ylim=(0, 1),
+                    ylim=(0, 1.2),
+                    xticks=np.arange(curves.shape[1]),
+                    xticklabels=[f"$\\theta_{k}$" for k in range(curves.shape[1])],
                 )
-                coefficient_ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                coefficient_ax.set_yticks(np.linspace(0, 1, 6))
                 bar_ax.plot(x, before[category_idx], "--", label="Before")
                 bar_ax.plot(x, after[category_idx], label="After")
                 bar_ax.set(xlabel="Stay day (1 = start)", ylabel="BAR level")
+                if max_bar_level is not None:
+                    # Same y-scale for every category and checkpoint, with the ceiling marked.
+                    bar_ax.axhline(
+                        max_bar_level,
+                        color="red",
+                        linestyle=":",
+                        linewidth=1,
+                        label=f"Max level ({max_bar_level})",
+                    )
+                    bar_ax.set_ylim(0, max_bar_level * 1.05)
                 bar_ax.legend()
                 probability_ax.set(
                     xlabel="Occupancy (%)", ylabel="Increment probability", ylim=(0, 1)
@@ -657,7 +696,27 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
                         ax.legend()
                     else:
                         values = metrics[key]
-                        ax.plot(x, values, marker=".", markersize=2)
+                        if key in RATE_COUNT_KEYS:
+                            # Days without observations have no rate; draw only observed days.
+                            observed = np.isfinite(values)
+                            counts = metrics[RATE_COUNT_KEYS[key]][observed]
+                            sizes = 8 + 52 * counts / max(counts.max(initial=1), 1)
+                            ax.scatter(x[observed], values[observed], s=sizes, alpha=0.7)
+                        else:
+                            ax.plot(
+                                x,
+                                values,
+                                marker=".",
+                                markersize=2,
+                                label="Added by today's bookings",
+                            )
+                            if key == "occupancy_pct":
+                                ax.plot(
+                                    x,
+                                    metrics["total_occupancy_pct"],
+                                    label="Total hotel occupancy (all bookings so far)",
+                                )
+                                ax.legend(loc="upper left")
                         if not np.isfinite(values).any():
                             ax.text(
                                 0.5,
@@ -677,7 +736,14 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
                         panel.set_ylim(*ylim)
                     panel.grid(True, alpha=0.3)
 
-                axes[-1, 0].set_xlabel("Stay day (1 = simulation start)")
+                axes[-1, 0].set_xlabel(
+                    "Stay day (1 = simulation start)"
+                    + (
+                        f" | marker size = number of {RATE_COUNT_KEYS[key]}"
+                        if key in RATE_COUNT_KEYS
+                        else ""
+                    )
+                )
                 fig.suptitle(
                     f"{ylabel}\n"
                     f"{'BAR state on' if key == 'bar_prices' else 'Requests received only on'} {cutoff} | "

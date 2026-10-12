@@ -14,12 +14,14 @@ from pricing_advertising.exceptions.exceptions import InvalidReservationWindowEr
 from pricing_advertising.requests.request import Request
 from pricing_advertising.utils.constants import (
     HIGH_SEASON,
-    HIGH_SEASON_MULTIPLIER,
+    MAX_ADVANCE_DAYS,
     MAX_DAYS_STAY,
     MAX_GUESTS,
+    MIN_ADVANCE_DAYS,
     MIN_GUESTS,
     MIN_NUM_REQUESTS_FACTOR,
     NUM_WINDOWS,
+    REQUESTS_HIGH_SEASON_MULTIPLIER,
     SEEDS,
     STD_FACTOR,
     WINDOW_SIZE,
@@ -36,6 +38,10 @@ class RequestGenerator:
         extended_end_simulation: date,  # date of ending extended simulation period
         seasonality_array: np.ndarray,  # array of seasonality
         *,
+        # Rooms per category (1, 2, 3 guests); used as sampling weights for the number of guests
+        num_category1_rooms: int,
+        num_category2_rooms: int,
+        num_category3_rooms: int,
         seed: int | None = None,
         # If true, all requests for the entire simulation period are precomputed during initialization.
         # If false (on-demand generation), requests are generated as needed for each day (old logic)
@@ -60,6 +66,13 @@ class RequestGenerator:
             raise ValueError(
                 "seasonality_array must cover exactly[start_simulation, extended_end_simulation]."
             )
+
+        room_counts = np.array(
+            [num_category1_rooms, num_category2_rooms, num_category3_rooms], dtype=float
+        )
+        if (room_counts < 0).any() or room_counts.sum() <= 0:
+            raise ValueError("Room counts must be non-negative with a positive total.")
+        self.guests_probs = room_counts / room_counts.sum()
 
         self.seed = seed
         self.rng: Generator = default_rng(seed)  # NumPy random number generator
@@ -122,12 +135,9 @@ class RequestGenerator:
     # Sample the number of requests for a given day combining seasonality, average number of requests, and stochastic distribution
     def _sample_num_requests(self, today: date) -> int:
         # Set the initial seasonality factor
-        seasonality_factor = 1
         # Update the seasonality factor if today is in the high season
-        if int(today.month in HIGH_SEASON):
-            seasonality_factor = HIGH_SEASON_MULTIPLIER
         # Adjust the mean number of requests based on the seasonality factor
-        adjusted_mean = max(0.0, self.avg_num_requests * seasonality_factor)
+        adjusted_mean = max(0.0, self.avg_num_requests)
         # Create a normal distribution with the adjusted mean and standard deviation
         distribution = norm(
             loc=adjusted_mean, scale=max(1e-6, STD_FACTOR * max(1.0, adjusted_mean))
@@ -152,7 +162,7 @@ class RequestGenerator:
             return None  # No more requests can be made
 
         # Possible advances are between 1 and maximum_advance - 1
-        possible_advances = np.arange(1, remaining_from_today, dtype=int)
+        possible_advances = np.arange(MIN_ADVANCE_DAYS, MAX_ADVANCE_DAYS, dtype=int)
         # Weights for the advances are linearly decreasing
         time_weights = np.arange(len(possible_advances), 0, -1, dtype=float)
         # Seasonality weights
@@ -173,8 +183,10 @@ class RequestGenerator:
             return None  # No days left to stay
         max_stay = int(min(MAX_DAYS_STAY, remaining_days_from_reservation))
         days_stay = int(self.rng.integers(1, max_stay + 1))  # [1, max_stay]
-        # Number of guests can be 1, 2 or 3
-        num_guests = self.rng.integers(MIN_GUESTS, MAX_GUESTS, endpoint=True)
+        # Number of guests (1, 2 or 3) weighted by the rooms available per category
+        num_guests = int(
+            self.rng.choice(np.arange(MIN_GUESTS, MAX_GUESTS + 1), p=self.guests_probs)
+        )
         return Request(
             t_request=today,
             t_reservation=t_reservation,
@@ -280,6 +292,9 @@ if __name__ == "__main__":
         end_simulation=end,
         extended_end_simulation=ext_end,
         seasonality_array=seasonality,
+        num_category1_rooms=100,
+        num_category2_rooms=50,
+        num_category3_rooms=30,
         seed=42,
         precompute=True,
     )

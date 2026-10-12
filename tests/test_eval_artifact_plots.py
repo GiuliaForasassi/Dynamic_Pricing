@@ -3,6 +3,7 @@ from datetime import date, timedelta
 
 import numpy as np
 import pytest
+from matplotlib.colors import to_rgba
 
 from pricing_advertising.plots import eval_artifact_plots as plots
 from pricing_advertising.plots.eval_artifact_plots import (
@@ -69,10 +70,15 @@ def test_six_policy_curves_and_stay_season_probabilities(monkeypatch, stored_sea
             probability_panel.lines[2 * category_idx].get_ydata(), 100 * expected
         )
         panels = figures["policy_diagnostics"].axes[3 * category_idx : 3 * category_idx + 3]
-        assert len(panels[0].lines) == len(panels[2].lines) == 2
+        assert panels[1].get_ylim() == (0, 10 * 1.05)
+        assert any(line.get_label() == "Max level (10)" for line in panels[1].lines)
+        assert len(panels[0].containers) == 2
+        assert len(panels[2].lines) == 2
         for season, label in enumerate(("Low season", "High season")):
+            container = panels[0].containers[season]
+            assert container.get_label() == label
             np.testing.assert_array_equal(
-                panels[0].lines[season].get_ydata(), coefficients[category_idx, season]
+                [bar.get_height() for bar in container], coefficients[category_idx, season]
             )
             line = panels[2].lines[season]
             assert line.get_label() == label
@@ -149,7 +155,7 @@ def test_plot_dates_follow_snapshots_and_labels_distinguish_nights(
 
     proposed_paths = [path for path in logged if path.startswith("proposed_price_by_advance/")]
     assert [path.split("/")[1] for path in proposed_paths] == snapshot_dates
-    assert len(logged) == (7 + 2 * int(with_history)) * len(snapshot_dates)
+    assert len(logged) == (7 + int(with_history)) * len(snapshot_dates)
     assert not any(path.startswith("request_plots/") for path in logged)
     for path, ylabel in logged.items():
         folder = path.split("/")[0]
@@ -160,9 +166,8 @@ def test_plot_dates_follow_snapshots_and_labels_distinguish_nights(
 
 
 @pytest.mark.parametrize("num_days", [1, 3, 61, 63])
-@pytest.mark.parametrize("show_bookings", [False, True])
 def test_bar_snapshot_uses_current_policy_and_daily_bookings(
-    monkeypatch: pytest.MonkeyPatch, num_days: int, show_bookings: bool
+    monkeypatch: pytest.MonkeyPatch, num_days: int
 ) -> None:
     request_day = date(2025, 2, 28)
     end = request_day + timedelta(days=num_days - 1)
@@ -199,26 +204,43 @@ def test_bar_snapshot_uses_current_policy_and_daily_bookings(
     logged = []
     monkeypatch.setattr(plots.mlflow, "log_figure", lambda fig, path: logged.append((fig, path)))
 
-    plots.log_bar_by_advance(artifact, show_bookings=show_bookings)
+    plots.log_bar_by_advance(artifact)
 
-    assert len(logged) == 2
+    assert len(logged) == 1
     assert (
         logged[0][1] == f"bar_by_advance/{request_day}/00000800_timesteps/env_01/episode_00002.png"
     )
     expected_model = np.full(num_days, 62.5)
     for fig, path in logged:
-        bar_ax, occupancy_ax, probability_ax = fig.axes
+        bar_ax, increase_ax, probability_ax = fig.axes
+        assert len(bar_ax.lines) == 4
+        assert [text.get_text() for text in bar_ax.get_legend().get_texts()] == [
+            "Category 1",
+            "Category 2",
+            "Category 3",
+        ]
+        np.testing.assert_array_equal(bar_ax.lines[-1].get_ydata(), [3, 3])
         for category_idx in range(3):
-            np.testing.assert_array_equal(bar_ax.lines[2 * category_idx].get_xdata(), advance)
+            np.testing.assert_array_equal(bar_ax.lines[category_idx].get_xdata(), advance)
             np.testing.assert_array_equal(
-                bar_ax.lines[2 * category_idx].get_ydata(), after[category_idx]
+                bar_ax.lines[category_idx].get_ydata(), after[category_idx]
             )
-            np.testing.assert_array_equal(
-                bar_ax.lines[2 * category_idx + 1].get_ydata(), before[category_idx]
-            )
-        np.testing.assert_array_equal(occupancy_ax.lines[0].get_ydata(), np.full(num_days, 10))
-        np.testing.assert_array_equal(occupancy_ax.lines[1].get_ydata(), np.zeros(num_days))
-        assert np.isnan(occupancy_ax.lines[2].get_ydata()).all()
+            assert bar_ax.lines[category_idx].get_label() == f"Category {category_idx + 1}"
+            assert bar_ax.lines[category_idx].get_linestyle() == "-"
+        np.testing.assert_array_equal(
+            increase_ax.collections[0].get_offsets(),
+            np.column_stack((advance[1:], np.ones(num_days - 1))),
+        )
+        for collection in increase_ax.collections[1:]:
+            assert collection.get_offsets().shape == (0, 2)
+        assert increase_ax.get_title() == "Actual BAR increases (+1)"
+        assert [tick.get_text() for tick in increase_ax.get_yticklabels()] == [
+            "Category 1",
+            "Category 2",
+            "Category 3",
+        ]
+        assert increase_ax.yaxis_inverted()
+        assert bool(increase_ax.texts) == (num_days == 1)
         np.testing.assert_allclose(
             probability_ax.lines[0].get_ydata(), np.where(advance > 0, expected_model, 0)
         )
@@ -226,16 +248,68 @@ def test_bar_snapshot_uses_current_policy_and_daily_bookings(
         np.testing.assert_array_equal(probability_ax.lines[2].get_ydata(), np.zeros(num_days))
         np.testing.assert_array_equal(probability_ax.lines[3].get_ydata(), np.zeros(num_days))
         assert np.isnan(probability_ax.lines[5].get_ydata()).all()
-        assert not occupancy_ax.collections
-        assert occupancy_ax.lines[0].get_marker() == ("^" if show_bookings else "None")
+        assert not increase_ax.lines
+        assert increase_ax.get_xlim() == probability_ax.get_xlim()
+        for category_idx, collection in enumerate(increase_ax.collections):
+            np.testing.assert_allclose(
+                collection.get_facecolors()[0],
+                to_rgba(f"C{category_idx}"),
+            )
         assert not bar_ax.xaxis_inverted()
         assert any(f"Decision on {request_day}" in text.get_text() for text in fig.texts)
         assert all("FULL-HISTORY" not in text.get_text() for text in fig.texts)
-        if "next_60_days" in path:
-            assert probability_ax.get_xlim() == (-0.5, 60.5)
-            assert len(probability_ax.patches) == int(num_days - 1 < 60)
         assert not plots.plt.fignum_exists(fig.number)
     assert artifact == original
+
+
+@pytest.mark.parametrize("event_advances", [((), (), ()), ((1, 3), (2,), (3, 4)), ((62,), (), ())])
+def test_bar_increase_events_use_observed_changes_and_visible_advance(
+    monkeypatch: pytest.MonkeyPatch, event_advances: tuple[tuple[int, ...], ...]
+) -> None:
+    request_day = date(2025, 8, 1)
+    num_days = 63
+    before = np.ones((3, num_days), dtype=int)
+    after = before.copy()
+    for category_idx, days in enumerate(event_advances):
+        after[category_idx, list(days)] += 1
+    after[2, 5] = 0
+    snapshot = {
+        "start_simulation": str(request_day),
+        "end_simulation": str(request_day + timedelta(days=num_days - 1)),
+        "request_day": str(request_day),
+        "snapshot_start_day": str(request_day),
+        "rooms_by_category": [10] * 3,
+        "occupancy_by_category": [[0] * num_days] * 3,
+        "bar_prices_by_category": [[100] * num_days] * 3,
+        "bar_levels_before_update": before.tolist(),
+        "bar_levels_by_category": after.tolist(),
+        "max_bar_level": 3,
+        "policy_coefficients": [[0.0] * 4] * 3,
+        "requests": [],
+    }
+    logged = []
+    monkeypatch.setattr(plots.mlflow, "log_figure", lambda fig, path: logged.append((fig, path)))
+    plots.log_bar_by_advance(
+        {
+            "checkpoint_timesteps": 800,
+            "env_index": 0,
+            "episode_id": 0,
+            "snapshot_dates": [str(request_day)],
+            "steps": [snapshot],
+        }
+    )
+    for fig, path in logged:
+        increase_ax = fig.axes[1]
+        limit = num_days - 1
+        for category_idx, days in enumerate(event_advances):
+            np.testing.assert_array_equal(
+                increase_ax.collections[category_idx].get_offsets(),
+                np.column_stack((days, np.full(len(days), category_idx + 1))),
+            )
+        no_visible_events = not any(day <= limit for days in event_advances for day in days)
+        assert bool(increase_ax.texts) == no_visible_events
+        if no_visible_events:
+            assert increase_ax.texts[0].get_text() == "No BAR increases on this decision day"
 
 
 @pytest.mark.parametrize(
@@ -283,7 +357,7 @@ def test_all_plots_exclude_other_request_days(
 
     plots.log_eval_artifact_plots(artifact)
 
-    assert len(logged) == 9
+    assert len(logged) == 8
     assert "request_plots" not in logged
     np.testing.assert_array_equal(build_snapshot_metrics(steps, steps[1])["requests"], [1, 1])
     proposed = logged["proposed_price_by_advance"]
@@ -291,28 +365,48 @@ def test_all_plots_exclude_other_request_days(
     np.testing.assert_array_equal(proposed.axes[0].lines[0].get_ydata(), [200])
     for panel in proposed.axes[1:]:
         assert np.isnan(panel.lines[0].get_ydata()).all()
+    for folder in ("confirmation_rate_plots", "price_acceptance_plots"):
+        np.testing.assert_allclose(
+            logged[folder].axes[0].collections[0].get_offsets()[:, 1], [1, 1]
+        )
     expected = {
-        "confirmation_rate_plots": [1, 1],
-        "price_acceptance_plots": [1, 1],
         "occupancy_plots": [100 / 30, 100 / 30],
     }
     for folder, values in expected.items():
         np.testing.assert_allclose(
             logged[folder].axes[0].lines[0].get_ydata(), values, equal_nan=True
         )
+    np.testing.assert_allclose(
+        logged["occupancy_plots"].axes[0].lines[1].get_ydata(), [100 * 1 / 30, 100 * 2 / 30]
+    )
     np.testing.assert_array_equal(
         logged["booked_price_plots"].axes[0].lines[0].get_ydata(), [180, 200]
     )
     policy = logged["policy_diagnostics"]
     for panel in policy.axes[::3]:
-        np.testing.assert_array_equal(panel.lines[0].get_ydata(), [0.25] * 4)
-        assert not panel.patches
+        np.testing.assert_array_equal([bar.get_height() for bar in panel.containers[0]], [0.25] * 4)
+        assert len(panel.patches) == 4
     np.testing.assert_array_equal(logged["bar_price_plots"].axes[0].lines[0].get_ydata(), [50, 200])
     for folder, fig in logged.items():
         for panel in fig.axes:
-            assert panel.lines, folder
-            if folder != "proposed_price_by_advance":
-                assert not panel.collections, folder
+            is_coefficient_panel = folder == "policy_diagnostics" and any(
+                panel is axis for axis in fig.axes[::3]
+            )
+            if is_coefficient_panel:
+                assert panel.containers, folder
+                assert not panel.lines, folder
+                continue
+            if folder == "bar_by_advance" and panel is fig.axes[1]:
+                assert not panel.lines, folder
+                for category_idx, collection in enumerate(panel.collections):
+                    np.testing.assert_array_equal(collection.get_offsets(), [[1, category_idx + 1]])
+            elif folder in {"confirmation_rate_plots", "price_acceptance_plots"}:
+                assert not panel.lines, folder
+                assert len(panel.collections) == 1, folder
+            else:
+                assert panel.lines, folder
+                if folder != "proposed_price_by_advance":
+                    assert not panel.collections, folder
             assert not panel.images, folder
             assert not panel.containers, folder
             assert all(line.get_linestyle() != "None" for line in panel.lines), folder
@@ -707,11 +801,13 @@ def test_known_values(example):
     expected = {
         "day": [59, 60, 61, 62],
         "requests": [0, 4, 1, 0],
+        "offers": [0, 3, 1, 0],
         "confirmed": [0, 1, 1, 0],
         "booked_revenue": [500, 0, 0, 0],
         "confirmation_rate": [np.nan, 0.25, 1, np.nan],
         "price_acceptance_rate": [np.nan, 2 / 3, 1, np.nan],
         "occupancy_pct": [0, 25, 25, 0],
+        "total_occupancy_pct": [25, 50, 25, 0],
         "bar_prices": [
             [150, 160, 170, 180],
             [250, 260, 270, 280],

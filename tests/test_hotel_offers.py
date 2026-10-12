@@ -18,9 +18,11 @@ from pricing_advertising.pricing_model import bar_table
 from pricing_advertising.requests.request import HotelOffer, Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
+    BOOKING_WINDOW,
+    LOGISTIC_ACCEPTANCE_ADVANCE_MAX,
+    LOGISTIC_ACCEPTANCE_ADVANCE_MIN,
     LOGISTIC_ACCEPTANCE_AVG_PRICES,
     LOGISTIC_ACCEPTANCE_HIGH_SEASON_MULTIPLIERS,
-    LOGISTIC_ACCEPTANCE_STDS,
 )
 
 
@@ -58,7 +60,6 @@ def test_acceptance_penalizes_only_period(
     model, total_price, base_probability = acceptance_case
     assert isinstance(model.rng, np.random.Generator)
     model.rng = Mock()
-    model.rng.normal.return_value = 100.0
     model.rng.random.return_value = base_probability * 0.9
     offer = HotelOffer(request, category, request.t_reservation + timedelta(days=day_shift), nights)
     price = total_price / request.days_stay * nights
@@ -114,21 +115,14 @@ def test_acceptance_daily_and_total_prices_match(booking_request, acceptance_cas
         (date(2025, 9, 30), 4, 105.0),
         (date(2025, 6, 30), 1, 100.0),
         (date(2025, 12, 31), 2, 120.0),
-        (None, 1, 100.0),
     ],
 )
 def test_reference_price_uses_stay_nights(check_in, nights, expected_mean):
     model = LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0}, high_season_multipliers={1: 1.2})
-    model.rng = Mock()
-    model.rng.normal.return_value = 123.0
 
-    assert (
-        model.generate_reference_price(
-            RoomCategory.CATEGORY1, t_reservation=check_in, days_stay=nights
-        )
-        == 123.0
-    )
-    model.rng.normal.assert_called_once_with(loc=pytest.approx(expected_mean), scale=10.0)
+    assert model.compute_reference_price(
+        RoomCategory.CATEGORY1, t_request=check_in, t_reservation=check_in, days_stay=nights
+    ) == pytest.approx(expected_mean)
 
 
 @pytest.mark.parametrize("request_day", [date(2025, 1, 1), date(2025, 4, 1)])
@@ -140,13 +134,11 @@ def test_seasonal_acceptance_uses_offered_period(request_day, alternative):
     nights = 3 if alternative else booking.days_stay
     offer = HotelOffer(booking, booking.category, check_in, nights)
     model.rng = Mock()
-    model.rng.normal.side_effect = lambda loc, scale: loc
     model.rng.random.return_value = 0.39 if alternative else 0.49
     daily_price = 120.0 if alternative else 110.0
 
     assert model.accept(daily_price * nights, offer)
     assert model.accept_daily_price(daily_price, offer)
-    model.rng.normal.assert_called_with(loc=pytest.approx(daily_price), scale=10.0)
     model.rng.random.return_value = 0.41 if alternative else 0.51
     assert not model.accept(daily_price * nights, offer)
 
@@ -157,7 +149,7 @@ def test_reference_price_rejects_invalid_seasonal_multiplier(multiplier):
         LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0}, high_season_multipliers={1: multiplier})
 
 
-def test_seasonal_reference_price_preserves_category_and_seed():
+def test_seasonal_reference_price_preserves_category():
     model = LogisticAcceptanceModel(
         1.0,
         {1: 100.0, 2: 200.0},
@@ -165,31 +157,118 @@ def test_seasonal_reference_price_preserves_category_and_seed():
         high_season_multipliers={1: 1.2, 2: 1.5},
     )
     for category, expected_shift in [(RoomCategory.CATEGORY1, 20), (RoomCategory.CATEGORY2, 100)]:
-        model.rng = np.random.default_rng(42)
-        low_season = model.generate_reference_price(category, t_reservation=date(2025, 4, 1))
-        model.rng = np.random.default_rng(42)
-        high_season = model.generate_reference_price(category, t_reservation=date(2025, 8, 1))
+        low_season = model.compute_reference_price(
+            category, t_request=date(2025, 4, 1), t_reservation=date(2025, 4, 1)
+        )
+        high_season = model.compute_reference_price(
+            category, t_request=date(2025, 8, 1), t_reservation=date(2025, 8, 1)
+        )
         assert high_season - low_season == pytest.approx(expected_shift)
 
 
 @pytest.mark.parametrize("multipliers", [None, {}, {1: 1.0}, {2: 1.5}])
-def test_neutral_seasonality_preserves_reference_draw(multipliers):
+def test_neutral_seasonality_and_advance_keep_base_price(multipliers):
     model = LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0}, high_season_multipliers=multipliers)
-    model.rng = np.random.default_rng(42)
-    expected = model.generate_reference_price(RoomCategory.CATEGORY1)
-    model.rng = np.random.default_rng(42)
-    assert (
-        model.generate_reference_price(
-            RoomCategory.CATEGORY1, t_reservation=date(2025, 8, 1), days_stay=3
-        )
-        == expected
+    assert model.compute_reference_price(
+        RoomCategory.CATEGORY1,
+        t_request=date(2025, 1, 1),
+        t_reservation=date(2025, 8, 1),
+        days_stay=3,
+    ) == pytest.approx(100.0)
+
+
+def test_reference_price_is_deterministic():
+    model = LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0}, high_season_multipliers={1: 1.2})
+    kwargs = {"t_request": date(2025, 1, 1), "t_reservation": date(2025, 8, 1), "days_stay": 3}
+    prices = {model.compute_reference_price(RoomCategory.CATEGORY1, **kwargs) for _ in range(5)}
+    assert len(prices) == 1
+
+
+@pytest.mark.parametrize(
+    "advance,expected_factor",
+    [(0, 1.0), (25, 0.95), (50, 0.9), (100, 0.8), (500, 0.8), (-3, 1.0)],
+)
+def test_advance_factor_decays_linearly_and_is_clipped(advance, expected_factor):
+    model = LogisticAcceptanceModel(
+        1.0, {1: 100.0}, {1: 10.0}, advance_max=1.0, advance_min=0.8, booking_window=100
     )
+    assert model.advance_factor(advance) == pytest.approx(expected_factor)
+
+
+def test_reference_price_decreases_with_advance_and_averages_nights():
+    model = LogisticAcceptanceModel(
+        1.0, {1: 100.0}, {1: 10.0}, advance_max=1.0, advance_min=0.8, booking_window=100
+    )
+    check_in = date(2025, 4, 10)
+    by_advance = [
+        model.compute_reference_price(
+            RoomCategory.CATEGORY1,
+            t_request=check_in - timedelta(days=advance),
+            t_reservation=check_in,
+        )
+        for advance in (0, 50, 100)
+    ]
+    assert by_advance == pytest.approx([100.0, 90.0, 80.0])
+    # Nights are 0 and 1 days ahead: factors 1.0 and 0.998
+    two_nights = model.compute_reference_price(
+        RoomCategory.CATEGORY1, t_request=check_in, t_reservation=check_in, days_stay=2
+    )
+    assert two_nights == pytest.approx(100.0 * (1.0 + 0.998) / 2)
+
+
+def test_seasonality_and_advance_combine_night_by_night():
+    model = LogisticAcceptanceModel(
+        1.0,
+        {1: 100.0},
+        {1: 10.0},
+        high_season_multipliers={1: 1.2},
+        advance_max=1.0,
+        advance_min=0.8,
+        booking_window=100,
+    )
+    # Nights: 30 June (low season, advance 50) and 1 July (high season, advance 51)
+    expected = 100.0 * (0.9 + 1.2 * 0.898) / 2
+    assert model.compute_reference_price(
+        RoomCategory.CATEGORY1,
+        t_request=date(2025, 5, 11),
+        t_reservation=date(2025, 6, 30),
+        days_stay=2,
+    ) == pytest.approx(expected)
+
+
+def test_early_booking_increases_acceptance_at_same_price():
+    model = LogisticAcceptanceModel(
+        1.0, {1: 100.0}, {1: 10.0}, advance_max=1.0, advance_min=0.8, booking_window=100
+    )
+    model.rng = Mock()
+    model.rng.random.return_value = 0.5
+    check_in = date(2025, 4, 10)
+    outcomes = []
+    for advance in (0, 100):
+        booking = Request(check_in - timedelta(days=advance), check_in, 1, 1)
+        offer = HotelOffer(booking, booking.category, check_in, 1)
+        outcomes.append(model.accept(95.0, offer))
+    # At the same price a last-minute client (reference 100) accepts, an early one (reference 80) does not
+    assert outcomes == [True, False]
+
+
+@pytest.mark.parametrize(
+    "kwargs,message",
+    [
+        ({"advance_max": 0.0}, "finite and positive"),
+        ({"advance_min": float("nan")}, "finite and positive"),
+        ({"advance_max": 0.8, "advance_min": 1.0}, "cannot be greater"),
+        ({"booking_window": 0}, "at least one day"),
+    ],
+)
+def test_invalid_advance_configuration(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0}, **kwargs)
 
 
 def test_high_season_increases_acceptance_at_same_price():
     model = LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0}, high_season_multipliers={1: 1.2})
     model.rng = Mock()
-    model.rng.normal.side_effect = lambda loc, scale: loc
     model.rng.random.return_value = 0.5
     for check_in, expected in [(date(2025, 4, 1), False), (date(2025, 8, 1), True)]:
         booking = Request(date(2025, 1, 1), check_in, 2, 1)
@@ -197,21 +276,16 @@ def test_high_season_increases_acceptance_at_same_price():
         assert model.accept(220.0, offer) == expected
 
 
-def test_seasonal_reference_price_remains_nonnegative():
-    model = LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0}, high_season_multipliers={1: 1.2})
-    model.rng = Mock()
-    model.rng.normal.return_value = -1.0
-    assert (
-        model.generate_reference_price(RoomCategory.CATEGORY1, t_reservation=date(2025, 8, 1))
-        == 0.0
-    )
-
-
 @pytest.mark.parametrize("nights", [0, -1])
 def test_reference_price_requires_positive_stay(nights):
     model = LogisticAcceptanceModel(1.0, {1: 100.0}, {1: 10.0})
     with pytest.raises(ValueError, match="at least one night"):
-        model.generate_reference_price(RoomCategory.CATEGORY1, days_stay=nights)
+        model.compute_reference_price(
+            RoomCategory.CATEGORY1,
+            t_request=date(2025, 1, 1),
+            t_reservation=date(2025, 1, 1),
+            days_stay=nights,
+        )
 
 
 @pytest.mark.parametrize("day_shift,nights", [(1, 2), (0, 2), (-1, 3), (1, 3)])
@@ -270,21 +344,33 @@ def make_env(monkeypatch):
 
 
 @pytest.mark.parametrize("category", list(RoomCategory))
-def test_default_env_uses_seasonal_acceptance(make_env, category):
+def test_default_env_uses_seasonal_and_advance_acceptance(make_env, category):
     env = make_env()
     model = env.acceptance_model
-    model.rng = Mock()
-    model.rng.normal.return_value = 100.0
-    model.rng.random.return_value = 0.0
     booking = Request(date(2025, 1, 1), date(2025, 6, 30), 2, category.value)
-    offer = HotelOffer(booking, category, booking.t_reservation, booking.days_stay)
-
-    assert model.accept(200.0, offer)
     multiplier = LOGISTIC_ACCEPTANCE_HIGH_SEASON_MULTIPLIERS[category.value]
-    model.rng.normal.assert_called_once_with(
-        loc=pytest.approx(LOGISTIC_ACCEPTANCE_AVG_PRICES[category.value] * (1 + multiplier) / 2),
-        scale=LOGISTIC_ACCEPTANCE_STDS[category.value],
+
+    def advance_factor(advance):
+        decay = LOGISTIC_ACCEPTANCE_ADVANCE_MAX - LOGISTIC_ACCEPTANCE_ADVANCE_MIN
+        return LOGISTIC_ACCEPTANCE_ADVANCE_MAX - advance / BOOKING_WINDOW * decay
+
+    # Nights: 30 June (low season, 180 days ahead) and 1 July (high season, 181 days ahead)
+    expected_reference = (
+        LOGISTIC_ACCEPTANCE_AVG_PRICES[category.value]
+        * (advance_factor(180) + multiplier * advance_factor(181))
+        / 2
     )
+    assert model.compute_reference_price(
+        category, t_request=booking.t_request, t_reservation=booking.t_reservation, days_stay=2
+    ) == pytest.approx(expected_reference)
+
+    # At the reference price the acceptance probability is exactly 0.5
+    model.rng = Mock()
+    offer = HotelOffer(booking, category, booking.t_reservation, booking.days_stay)
+    model.rng.random.return_value = 0.5 - 1e-9
+    assert model.accept(expected_reference * 2, offer)
+    model.rng.random.return_value = 0.5 + 1e-9
+    assert not model.accept(expected_reference * 2, offer)
 
 
 @pytest.mark.parametrize("allow_category", [False, True])
