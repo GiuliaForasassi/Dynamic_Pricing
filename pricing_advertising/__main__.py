@@ -36,8 +36,8 @@ if __name__ == "__main__":
     num_category2_rooms = 50  # Number of rooms in category 2
     num_category3_rooms = 30  # Number of rooms in category 3
     avg_num_requests = 60  # Average number of requests per day
-    allow_category_alternative = False  # Both False disables alternatives (baseline)
-    allow_period_alternative = False
+    allow_category_alternative = True  # Both False disables alternatives (baseline)
+    allow_period_alternative = True
 
     # ----- Derived simulation parameters ---------
     episode_len = (end_simulation - start_simulation).days + 1
@@ -54,67 +54,67 @@ if __name__ == "__main__":
     print("expected_logged_episodes =", expected_logged_episodes)
 
     # # ----- Run PPO policy simulation ---------
-    # final_mean_reward = run_simulation(
-    #     run_name="PPO_1M_no_alternatives",
-    #     total_timesteps=total_timesteps,
-    #     n_envs=n_envs,
-    #     n_steps=n_steps,
-    #     learning_rate=learning_rate,
-    #     gamma=gamma,
-    #     n_epochs=n_epochs,
-    #     batch_size=batch_size,
-    #     ent_coef=ent_coef,
-    #     gae_lambda=gae_lambda,
-    #     clip_range=clip_range,
-    #     net_arch=net_arch,
-    #     policy="MultiInputPolicy",
-    #     eval_episodes=eval_episodes,
-    #     eval_frequency=eval_frequency,
-    #     start_simulation=start_simulation,
-    #     end_simulation=end_simulation,
-    #     num_category1_rooms=num_category1_rooms,
-    #     num_category2_rooms=num_category2_rooms,
-    #     num_category3_rooms=num_category3_rooms,
-    #     price_plot_request_dates=[
-    #         (2025, 2, 28),
-    #         (2025, 5, 15),
-    #         (2025, 8, 1),
-    #         (2025, 11, 12),
-    #     ],
-    #     seed=SEEDS[0],
-    #     avg_num_requests=avg_num_requests,
-    #     allow_category_alternative=allow_category_alternative,
-    #     allow_period_alternative=allow_period_alternative,
-    #     eval_seed=SEEDS[0] + 10_000,
-    # )
-    # print(f"Final eval mean reward: {final_mean_reward:.3f}")
-
-    # ----- Run random policy simulation ---------
-    final_mean_reward = run_random_policy_simulation(
-        run_name="Random_baseline_1M",
-        seed=SEEDS[0],
-        eval_seed=SEEDS[0] + 10_000,
+    final_mean_reward = run_simulation(
+        run_name="PPO_1M_with_alternatives",
+        total_timesteps=total_timesteps,
+        n_envs=n_envs,
+        n_steps=n_steps,
+        learning_rate=learning_rate,
+        gamma=gamma,
+        n_epochs=n_epochs,
+        batch_size=batch_size,
+        ent_coef=ent_coef,
+        gae_lambda=gae_lambda,
+        clip_range=clip_range,
+        net_arch=net_arch,
+        policy="MultiInputPolicy",
+        eval_episodes=eval_episodes,
+        eval_frequency=eval_frequency,
         start_simulation=start_simulation,
         end_simulation=end_simulation,
         num_category1_rooms=num_category1_rooms,
         num_category2_rooms=num_category2_rooms,
         num_category3_rooms=num_category3_rooms,
-        avg_num_requests=avg_num_requests,
-        eval_episodes=eval_episodes,
-        allow_category_alternative=allow_category_alternative,
-        allow_period_alternative=allow_period_alternative,
         price_plot_request_dates=[
             (2025, 2, 28),
             (2025, 5, 15),
             (2025, 8, 1),
             (2025, 11, 12),
         ],
+        seed=SEEDS[0],
+        avg_num_requests=avg_num_requests,
+        allow_category_alternative=allow_category_alternative,
+        allow_period_alternative=allow_period_alternative,
+        eval_seed=SEEDS[0] + 10_000,
     )
-    print(f"Random eval mean reward: {final_mean_reward:.3f}")
+    print(f"Final eval mean reward: {final_mean_reward:.3f}")
+
+    # ----- Run random policy simulation ---------
+    # final_mean_reward = run_random_policy_simulation(
+    #     run_name="Random_baseline_1M_with_alternatives",
+    #     seed=SEEDS[0],
+    #     eval_seed=SEEDS[0] + 10_000,
+    #     start_simulation=start_simulation,
+    #     end_simulation=end_simulation,
+    #     num_category1_rooms=num_category1_rooms,
+    #     num_category2_rooms=num_category2_rooms,
+    #     num_category3_rooms=num_category3_rooms,
+    #     avg_num_requests=avg_num_requests,
+    #     eval_episodes=eval_episodes,
+    #     allow_category_alternative=allow_category_alternative,
+    #     allow_period_alternative=allow_period_alternative,
+    #     price_plot_request_dates=[
+    #         (2025, 2, 28),
+    #         (2025, 5, 15),
+    #         (2025, 8, 1),
+    #         (2025, 11, 12),
+    #     ],
+    # )
+    # print(f"Random eval mean reward: {final_mean_reward:.3f}")
 
     # # ----- Run constant BAR policy simulation (never increments) ---------
     # final_mean_reward = run_constant_bar_policy_simulation(
-    #     run_name="Constant_bar_baseline_1M",
+    #     run_name="Constant_bar_baseline_1M_with_alternatives",
     #     seed=SEEDS[0],
     #     eval_seed=SEEDS[0] + 10_000,
     #     start_simulation=start_simulation,
@@ -137,7 +137,7 @@ if __name__ == "__main__":
 
     # ----- Run always-increment policy simulation (+1 BAR level every step) ---------
     # final_mean_reward = run_always_increment_policy_simulation(
-    #     run_name="Always_increment_baseline_1M",
+    #     run_name="Always_increment_baseline_1M_with_alternatives",
     #     seed=SEEDS[0],
     #     eval_seed=SEEDS[0] + 10_000,
     #     start_simulation=start_simulation,

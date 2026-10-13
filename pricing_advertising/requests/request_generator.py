@@ -22,7 +22,6 @@ from pricing_advertising.utils.constants import (
     MIN_NUM_REQUESTS_FACTOR,
     NUM_WINDOWS,
     REQUESTS_HIGH_SEASON_MULTIPLIER,
-    SEEDS,
     STD_FACTOR,
     WINDOW_SIZE,
 )
@@ -134,10 +133,10 @@ class RequestGenerator:
     # ------------- Sampling number of requests function -----------
     # Sample the number of requests for a given day combining seasonality, average number of requests, and stochastic distribution
     def _sample_num_requests(self, today: date) -> int:
-        # Set the initial seasonality factor
-        # Update the seasonality factor if today is in the high season
+        # Seasonality factor: higher demand volume in high-season months
+        seasonality_factor = REQUESTS_HIGH_SEASON_MULTIPLIER if today.month in HIGH_SEASON else 1.0
         # Adjust the mean number of requests based on the seasonality factor
-        adjusted_mean = max(0.0, self.avg_num_requests)
+        adjusted_mean = max(0.0, self.avg_num_requests * seasonality_factor)
         # Create a normal distribution with the adjusted mean and standard deviation
         distribution = norm(
             loc=adjusted_mean, scale=max(1e-6, STD_FACTOR * max(1.0, adjusted_mean))
@@ -162,7 +161,7 @@ class RequestGenerator:
             return None  # No more requests can be made
 
         # Possible advances are between 1 and maximum_advance - 1
-        possible_advances = np.arange(MIN_ADVANCE_DAYS, MAX_ADVANCE_DAYS, dtype=int)
+        possible_advances = np.arange(1, remaining_from_today, dtype=int)
         # Weights for the advances are linearly decreasing
         time_weights = np.arange(len(possible_advances), 0, -1, dtype=float)
         # Seasonality weights
