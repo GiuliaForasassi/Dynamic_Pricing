@@ -1,6 +1,7 @@
 from typing import Any
 
 from pricing_advertising.plots.acceptance_rate_tracker import AcceptanceRateTracker
+from pricing_advertising.plots.alternatives_tracker import AlternativesTracker
 from pricing_advertising.plots.occupancy_tracker import OccupancyTracker
 from pricing_advertising.plots.price_tracker import PriceTracker
 from pricing_advertising.plots.request_tracker import RequestTracker
@@ -17,12 +18,14 @@ class EpisodeMetrics:
         self.reward = RewardTracker(split=split, log_to_mlflow=log_to_mlflow)
         self.price = PriceTracker(split=split, log_to_mlflow=log_to_mlflow)
         self.acceptance = AcceptanceRateTracker(split=split, log_to_mlflow=log_to_mlflow)
+        self.alternatives = AlternativesTracker(split=split, log_to_mlflow=log_to_mlflow)
         self._trackers = (
             self.occupancy,
             self.requests,
             self.reward,
             self.price,
             self.acceptance,
+            self.alternatives,
         )
 
     def record_day(self, metrics: dict[str, Any]) -> None:
@@ -56,6 +59,13 @@ class EpisodeMetrics:
             num_offers=int(metrics["num_offers"]),
             num_price_accepted=int(metrics["num_price_accepted"]),
             num_confirmed=int(metrics["num_confirmed"]),
+        )
+        self.alternatives.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            num_requests=int(metrics["num_requests"]),
+            occupancy_pct=float(metrics["occupancy_pct"]),
+            offer_stats=metrics["offer_stats"],
         )
 
     def end_episode(self) -> None:

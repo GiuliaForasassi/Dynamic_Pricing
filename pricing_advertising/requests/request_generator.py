@@ -22,6 +22,7 @@ from pricing_advertising.utils.constants import (
     MIN_NUM_REQUESTS_FACTOR,
     NUM_WINDOWS,
     REQUESTS_HIGH_SEASON_MULTIPLIER,
+    STAY_DURATION_PMF,
     STD_FACTOR,
     WINDOW_SIZE,
 )
@@ -178,10 +179,14 @@ class RequestGenerator:
         t_reservation = today + timedelta(days=advance_days)
         # Days that can be booked
         remaining_days_from_reservation = (booking_end - t_reservation).days
-        if remaining_days_from_reservation < 0:
-            return None  # No days left to stay
         max_stay = int(min(MAX_DAYS_STAY, remaining_days_from_reservation))
-        days_stay = int(self.rng.integers(1, max_stay + 1))  # [1, max_stay]
+        if max_stay < 1:
+            return None  # No days left to stay
+        # Sample the stay duration from the log-normal distribution truncated at max_stay
+        stay_weights = STAY_DURATION_PMF[:max_stay]
+        days_stay = int(
+            self.rng.choice(np.arange(1, max_stay + 1), p=stay_weights / stay_weights.sum())
+        )
         # Number of guests (1, 2 or 3) weighted by the rooms available per category
         num_guests = int(
             self.rng.choice(np.arange(MIN_GUESTS, MAX_GUESTS + 1), p=self.guests_probs)

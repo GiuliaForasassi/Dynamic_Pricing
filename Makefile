@@ -7,6 +7,8 @@ else
 endif
 
 export SRC_DIR=pricing-advertising
+export MLFLOW_TRACKING_URI=sqlite:///mlflow.db
+MLFLOW_PORT ?= 5000
 
 # == SETUP REPOSITORY AND DEPENDENCIES
 
@@ -40,3 +42,8 @@ test:
 	uv run pytest --verbose --color=yes tests
 
 all-validation: format lint test
+
+# === MLFLOW
+
+mlflow-ui:
+	uv run mlflow ui --backend-store-uri $(MLFLOW_TRACKING_URI) --port $(MLFLOW_PORT)

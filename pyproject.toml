@@ -19,7 +19,7 @@ requires-python = ">=3.12"
     "stable-baselines3>=2.6.0",
     "pygame>=2.6.1",
     "rich>=13.9.4",
-    "mlflow>=2.21.2",
+    "mlflow>=3.17.2",
     "optuna>=4.2.1",
     "snakeviz>=2.2.2",
 ]

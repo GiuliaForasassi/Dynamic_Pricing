@@ -306,6 +306,11 @@ def logged(monkeypatch):
     return metrics, texts, artifacts
 
 
+@pytest.fixture(autouse=True)
+def no_figure_upload(monkeypatch):
+    monkeypatch.setattr(module.mlflow, "log_figure", lambda fig, path: None)
+
+
 @pytest.fixture
 def make_env(monkeypatch):
     csv_path = Path(__file__).resolve().parents[1] / "data" / "bar_table.csv"
@@ -794,3 +799,95 @@ def test_eval_callback_logs_once_per_round_and_preserves_episode_artifacts(
                 assert terminal_request["daily_prices"] == [price, price]
     finally:
         vec.close()
+
+
+def test_train_callback_logs_raw_action_statistics_and_figures(make_env, logged, monkeypatch):
+    metrics, _, _ = logged
+    figures = {}
+    monkeypatch.setattr(module.mlflow, "log_figure", lambda fig, path: figures.update({path: fig}))
+    env, _ = make_env()
+    vec = VecMonitor(DummyVecEnv([lambda: env]))
+    model = PPO("MultiInputPolicy", vec, n_steps=2, batch_size=2, n_epochs=1, seed=1, device="cpu")
+    model.set_logger(Logger(folder=None, output_formats=[]))
+    try:
+        model.learn(total_timesteps=4, callback=module.PlotCallback(figure_every_rollouts=1))
+    finally:
+        vec.close()
+
+    for name in (
+        "action_mean",
+        "action_std",
+        "action_clipped_low_fraction",
+        "action_clipped_high_fraction",
+    ):
+        series = points(metrics, name, "train")
+        assert [step for step, _ in series] == [2, 4], name
+    for name in ("action_clipped_low_fraction", "action_clipped_high_fraction"):
+        assert all(0.0 <= value <= 1.0 for _, value in points(metrics, name, "train"))
+    assert {"learning/action_mean.png", "learning/action_clipping.png"} <= set(figures)
+    # 3 categories x 2 seasons, 4 coefficient lines each
+    assert len(figures["learning/action_mean.png"].axes) == 6
+    assert all(len(panel.lines) >= 4 for panel in figures["learning/action_mean.png"].axes)
+
+
+def test_eval_callback_logs_learning_diagnostics(make_env, logged, monkeypatch, tmp_path):
+    metrics, _, _ = logged
+    figures = {}
+    monkeypatch.setattr(module.mlflow, "log_figure", lambda fig, path: figures.update({path: fig}))
+    monkeypatch.setattr(module, "log_eval_artifact_plots", lambda artifact: None)
+    training_env, _ = make_env(price=100.0)
+    evaluation_env, _ = make_env(price=200.0, collect_artifacts=True)
+    training = VecNormalize(
+        VecMonitor(DummyVecEnv([lambda: training_env])),
+        norm_obs=False,
+        norm_reward=True,
+        gamma=0.995,
+    )
+    evaluation = VecNormalize(
+        VecMonitor(DummyVecEnv([lambda: evaluation_env])),
+        training=False,
+        norm_obs=False,
+        norm_reward=False,
+        gamma=0.995,
+    )
+    model = PPO(
+        "MultiInputPolicy",
+        training,
+        n_steps=2,
+        batch_size=2,
+        n_epochs=1,
+        gamma=0.995,
+        seed=42,
+        device="cpu",
+    )
+    model.set_logger(Logger(folder=None, output_formats=[]))
+    callback = module.EvalOccupancyCallback(
+        evaluation,
+        eval_freq=2,
+        n_eval_episodes=2,
+        verbose=0,
+        baseline_returns={"constant_bar": [300.0, 320.0]},
+    )
+    try:
+        model.learn(total_timesteps=4, callback=callback)
+    finally:
+        training.close()
+        evaluation.close()
+
+    # Raw (unnormalized) EUR returns, one list per evaluation round
+    assert callback._eval_returns == {2: [600.0, 600.0], 4: [600.0, 600.0]}
+    assert points(metrics, "baseline_return/constant_bar", "val") == [(2, 310.0), (4, 310.0)]
+    assert [step for step, _ in points(metrics, "value_check/explained_variance", "val")] == [2, 4]
+    assert {
+        "learning/eval_return_vs_baselines.png",
+        "learning/policy_curve_evolution.png",
+        "value_check/00000002_timesteps/env_00/episode_00000.png",
+        "value_check/00000002_timesteps/env_00/episode_00001.png",
+        "value_check/00000004_timesteps/env_00/episode_00001.png",
+    } <= set(figures)
+    returns_axis = figures["learning/eval_return_vs_baselines.png"].axes[0]
+    assert returns_axis.get_legend().get_texts()[-1].get_text() == "constant_bar: 310"
+    np.testing.assert_allclose(returns_axis.lines[0].get_ydata(), [600.0, 600.0])
+    policy_axes = figures["learning/policy_curve_evolution.png"].axes
+    assert len(policy_axes) == 7  # 3 x 2 panels + colorbar
+    assert all(len(panel.lines) == 2 for panel in policy_axes[:6])

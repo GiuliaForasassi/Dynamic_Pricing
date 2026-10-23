@@ -25,6 +25,7 @@ import pricing_advertising.environment.__init__  # noqa: F401
 # your imports
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.plots.plot_callback import EvalOccupancyCallback, PlotCallback
+from pricing_advertising.training.baseline_returns import evaluate_baseline_returns
 from pricing_advertising.utils.constants import SEEDS
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
@@ -65,6 +66,7 @@ def run_simulation(
     clip_range: float = 0.2,
     net_arch: list[int] | dict[str, list[int]] | None = None,
     run_name: str = "PPO_vec_normalize",
+    evaluate_baselines: bool = True,  # Draw constant/always-increment/random returns in the eval plot
 ) -> float:
     # --------- Checks ----------------
     if n_envs <= 0:
@@ -236,6 +238,13 @@ def run_simulation(
         )
 
         # Evaluation callback for evaluating the model
+        baseline_returns = (
+            evaluate_baseline_returns(
+                env_kwargs, eval_seed=eval_seed, episodes=eval_episodes, seed=seed
+            )
+            if evaluate_baselines
+            else None
+        )
         eval_callback = EvalOccupancyCallback(
             eval_env,
             eval_freq=eval_frequency,
@@ -245,6 +254,7 @@ def run_simulation(
             best_model_save_path=str(best_model_dir),
             log_path=str(output_dir / "eval_logs"),
             log_to_mlflow=True,
+            baseline_returns=baseline_returns,
         )
 
         # ------------ List of callbacks ------------------

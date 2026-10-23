@@ -19,7 +19,7 @@ from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import ROOM_ALTERNATIVES, RoomCategory
 from pricing_advertising.pricing_model.bar_table import get_price, n_levels
 from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
-from pricing_advertising.requests.request import HotelOffer, Request
+from pricing_advertising.requests.request import ORIGINAL_OFFER, HotelOffer, Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
     BOOKING_WINDOW,
@@ -231,6 +231,10 @@ class PricingEnv(gym.Env):
         self.rejected_total = 0
         self.last_day_avg_price = 0.0
 
+        # Per-step statistics on proposed offers (original and alternatives), reset at each step
+        self._offer_events: list[dict[str, Any]] = []
+        self._request_outcomes: Counter[str] = Counter()
+
     # ---------- Initialize dynamics RNGs ---------------
     def _init_dynamics_rngs(self, seed: int | None) -> None:
         bar_seed, alternative_seed, acceptance_seed = np.random.SeedSequence(seed).spawn(3)
@@ -343,11 +347,15 @@ class PricingEnv(gym.Env):
         if self.today > self.end_simulation:
             raise gym.error.ResetNeeded("Episode has terminated; call reset() before step().")
         action = self._validate_action(action)
+        self._offer_events = []
+        self._request_outcomes = Counter()
         # Generate requests for the current day
         requests = self.request_generator.fetch_requests_for_date(self.today)
 
         # Check if the requests can be accommodated
-        valid_mask, valid_requests = self._process_requests(requests, self.today)
+        valid_mask, valid_requests = self._process_requests(
+            requests, self.today, self._request_outcomes
+        )
 
         # Update the demand
         self._update_demand(requests)
@@ -471,6 +479,12 @@ class PricingEnv(gym.Env):
             # Copie indipendenti dallo stato mutabile dell'ambiente.
             "confirmed_requests": deepcopy(final_requests),
             "confirmed_nightly_prices": final_nightly_prices,
+            # Every offer proposed today (original or alternative) with its outcome.
+            "offer_stats": {
+                "events": self._offer_events,
+                "num_outside_booking_window": int(self._request_outcomes["outside_window"]),
+                "num_unavailable": int(self._request_outcomes["unavailable"]),
+            },
         }
 
         # For plottings artifacts
@@ -696,7 +710,10 @@ class PricingEnv(gym.Env):
 
     # --------------- Process Requests ---------------
     # Process all incoming requests and propone alternative offers if necessary
-    def _process_requests(self, requests: np.ndarray, today: date) -> tuple[np.ndarray, np.ndarray]:
+    # If given, `outcomes` counts the requests with no offer: "outside_window" or "unavailable"
+    def _process_requests(
+        self, requests: np.ndarray, today: date, outcomes: Counter[str] | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
         # Initialize masks and offers lists for tracking request outcomes
         masks: list[bool] = []
         offers: list[HotelOffer] = []
@@ -707,6 +724,8 @@ class PricingEnv(gym.Env):
             offer = HotelOffer(request, request.category, request.t_reservation, request.days_stay)
             if not self._within_booking_window(offer):
                 masks.append(False)
+                if outcomes is not None:
+                    outcomes["outside_window"] += 1
                 continue
             # Check if the initial offer can be accommodated in the hotel
             if not self.check_hotel_availability(offer):
@@ -719,6 +738,8 @@ class PricingEnv(gym.Env):
             # Append the offer to the offers list if it is not None
             if offer is not None:
                 offers.append(offer)
+            elif outcomes is not None:
+                outcomes["unavailable"] += 1
         # Convert the masks and offers lists to numpy arrays for efficient processing and return them
         return np.asarray(masks, dtype=bool), np.asarray(offers, dtype=object)
 
@@ -904,6 +925,7 @@ class PricingEnv(gym.Env):
         for index, offer in enumerate(offers):
             accepted = bool(accepted_mask[index])
             booked = accepted and self.update_hotel_occupancy(offer)
+            self._record_offer_event(offer, "initial", accepted, booked, float(total_prices[index]))
             if self.collect_eval_artifacts:
                 attempts[index].append(
                     self._offer_attempt_to_artifact(offer, daily_prices[index], accepted, booked)
@@ -923,6 +945,7 @@ class PricingEnv(gym.Env):
             total = float(sum(prices))
             accepted = bool(self.acceptance_model.accept(total, alternative))
             booked = accepted and self.update_hotel_occupancy(alternative)
+            self._record_offer_event(alternative, "recovery", accepted, booked, total)
             offers[index] = alternative
             daily_prices[index] = prices
             total_prices[index] = total
@@ -933,6 +956,35 @@ class PricingEnv(gym.Env):
                     self._offer_attempt_to_artifact(alternative, prices, accepted, booked)
                 )
         return confirmed, attempts
+
+    # Store the outcome of a proposed offer for the offer statistics.
+    # stage: "initial" (offer built before pricing) or "recovery" (alternative proposed after the
+    # accepted offer could not be booked). For a confirmed alternative, `reference_price` is the
+    # price the original request would have paid at the same BAR levels.
+    def _record_offer_event(
+        self, offer: HotelOffer, stage: str, accepted: bool, confirmed: bool, price: float
+    ) -> None:
+        offer_type = offer.offer_type
+        reference_price = price
+        if confirmed and offer_type != ORIGINAL_OFFER:
+            request = offer.request
+            original = HotelOffer(
+                request, request.category, request.t_reservation, request.days_stay
+            )
+            reference_price = float(
+                sum(self._quote_prices(np.asarray([original], dtype=object))[0])
+            )
+        self._offer_events.append(
+            {
+                "type": offer_type,
+                "stage": stage,
+                "check_in_index": int((offer.request.t_reservation - self.start_simulation).days),
+                "price_accepted": accepted,
+                "confirmed": confirmed,
+                "price": price if confirmed else 0.0,
+                "reference_price": reference_price if confirmed else 0.0,
+            }
+        )
 
     @staticmethod
     def _offer_attempt_to_artifact(

@@ -21,13 +21,13 @@ if __name__ == "__main__":
     end_simulation = date(2025, 12, 31)  # End date of the simulation
     n_envs = 4  # Number of parallel environments
     total_timesteps = TOTAL_TIMESTEPS_1M  # Total number of timesteps for training
-    n_steps = 500  # Number of steps per environment per rollout
+    n_steps = 730  # Number of steps per environment per rollout
     learning_rate = 3e-4  # Learning rate for the optimizer
-    gamma = 0.995  # Discount factor for future rewards
+    gamma = 0.999  # Discount factor for future rewards
     n_epochs = 10  # Number of epochs per update
-    batch_size = 250  # Minibatch size; preferably a divisor of n_steps * n_envs
-    ent_coef = 0.001  # Entropy coefficient encouraging exploration
-    gae_lambda = 0.95  # Bias-variance trade-off for advantage estimation
+    batch_size = 365  # Minibatch size; preferably a divisor of n_steps * n_envs
+    ent_coef = 0.0  # Entropy coefficient for the loss calculation
+    gae_lambda = 0.98  # Bias-variance trade-off for advantage estimation
     clip_range = 0.2  # PPO policy clipping range
     net_arch = dict(pi=[64, 64], vf=[64, 64])  # Hidden layers for actor and critic
     eval_frequency = 10000  # Frequency of evaluation during training
@@ -36,8 +36,8 @@ if __name__ == "__main__":
     num_category2_rooms = 50  # Number of rooms in category 2
     num_category3_rooms = 30  # Number of rooms in category 3
     avg_num_requests = 60  # Average number of requests per day
-    allow_category_alternative = True  # Both False disables alternatives (baseline)
-    allow_period_alternative = True
+    allow_category_alternative = False  # Both False disables alternatives (baseline)
+    allow_period_alternative = False
 
     # ----- Derived simulation parameters ---------
     episode_len = (end_simulation - start_simulation).days + 1
@@ -55,7 +55,7 @@ if __name__ == "__main__":
 
     # # ----- Run PPO policy simulation ---------
     final_mean_reward = run_simulation(
-        run_name="PPO_1M_with_alternatives",
+        run_name="PPO_1M_no_alternatives",
         total_timesteps=total_timesteps,
         n_envs=n_envs,
         n_steps=n_steps,

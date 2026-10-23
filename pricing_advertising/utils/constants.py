@@ -1,5 +1,8 @@
 # CONSTANTS
 
+import numpy as np
+from scipy.stats import lognorm
+
 ############### SEEDS #######################
 
 SEEDS = [
@@ -18,7 +21,18 @@ SEEDS = [
 ############### REQUEST PARAMETERS ################
 
 # Maximum number of days a client can stay
-MAX_DAYS_STAY = 10
+MAX_DAYS_STAY = 7
+# Stay duration = ceil(X) with X ~ LogNormal(mu, sigma), truncated at MAX_DAYS_STAY and renormalized
+# (mu and sigma are the mean and std of log(X); the median of X is exp(mu))
+STAY_LOGNORMAL_MU = 0.9
+STAY_LOGNORMAL_SIGMA = 0.6
+# P(ceil(X) = d) = F(d) - F(d - 1): probability of a stay of 1, 2, ..., MAX_DAYS_STAY nights
+# (renormalized again when truncated further)
+_stay_cdf = lognorm.cdf(
+    np.arange(MAX_DAYS_STAY + 1), s=STAY_LOGNORMAL_SIGMA, scale=np.exp(STAY_LOGNORMAL_MU)
+)
+_stay_pmf = np.diff(_stay_cdf)
+STAY_DURATION_PMF = _stay_pmf / _stay_pmf.sum()
 # Number of min guests in a room = category 1
 MIN_GUESTS = 1
 # Number of max guests in a room = category 3

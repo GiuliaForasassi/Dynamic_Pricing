@@ -5,6 +5,26 @@ from loguru import logger
 
 from pricing_advertising.enums.enums import RoomCategory
 
+# ------------------ OFFER TYPES ------------------
+# "original" is the offer matching the request; the others are the alternatives the env can propose.
+ORIGINAL_OFFER = "original"
+CATEGORY_ALTERNATIVES = ("cat_1_to_2", "cat_1_to_3", "cat_2_to_3")
+PERIOD_ALTERNATIVES = (
+    "period_start_later_shorter",  # x+1, d-1
+    "period_end_earlier",  # x, d-1
+    "period_shift_earlier",  # x-1, d
+    "period_shift_later",  # x+1, d
+)
+OFFER_TYPES = (ORIGINAL_OFFER, *CATEGORY_ALTERNATIVES, *PERIOD_ALTERNATIVES)
+ALTERNATIVE_TYPES = OFFER_TYPES[1:]
+
+_PERIOD_ALTERNATIVE_BY_DELTA = {
+    (1, -1): "period_start_later_shorter",
+    (0, -1): "period_end_earlier",
+    (-1, 0): "period_shift_earlier",
+    (1, 0): "period_shift_later",
+}
+
 
 # ------------------ USER REQUEST ------------------
 class Request:
@@ -78,3 +98,18 @@ class HotelOffer:
             self.t_reservation != self.request.t_reservation
             or self.days_stay != self.request.days_stay
         )
+
+    # Classify the offer with respect to the original request (one of OFFER_TYPES)
+    @property
+    def offer_type(self) -> str:
+        if self.category != self.request.category:
+            if self.period_changed:
+                raise ValueError("Offers changing both category and period are not supported.")
+            return f"cat_{self.request.category.value}_to_{self.category.value}"
+        if not self.period_changed:
+            return ORIGINAL_OFFER
+        delta = (
+            (self.t_reservation - self.request.t_reservation).days,
+            self.days_stay - self.request.days_stay,
+        )
+        return _PERIOD_ALTERNATIVE_BY_DELTA[delta]

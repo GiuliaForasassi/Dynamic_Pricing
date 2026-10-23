@@ -867,13 +867,15 @@ def test_generator_can_book_last_visible_night(make_env, monkeypatch):
     env = make_env()
     rng = Mock()
     rng.choice.side_effect = lambda values, p: values[-1]
-    rng.integers.side_effect = lambda low, high, **kwargs: low
     monkeypatch.setattr(env.request_generator, "rng", rng)
     booking = env.request_generator._generate_request(env.today)
     assert booking.advance == 360
     assert booking.days_stay == 1
     assert env._within_booking_window(booking)
-    assert rng.integers.call_args_list[0].args == (1, 2)
+    # Stay duration is sampled among the only available night
+    stay_call = rng.choice.call_args_list[1]
+    assert stay_call.args[0].tolist() == [1]
+    assert stay_call.kwargs["p"].tolist() == [1.0]
 
 
 def test_conflict_recovery_cannot_offer_night_outside_window(make_env, monkeypatch):
