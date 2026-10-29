@@ -33,6 +33,7 @@ def evaluate_baseline_returns(
             try:
                 if policy is None:
                     policy = make_policy(env.action_space, seed)
+                env.set_warmup_policy(lambda observation: policy.predict(observation)[0])
                 observation, _ = env.reset(seed=eval_seed)
                 total = 0.0
                 done = False

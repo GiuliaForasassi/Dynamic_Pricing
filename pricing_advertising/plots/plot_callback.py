@@ -33,6 +33,7 @@ from pricing_advertising.plots.price_tracker import PriceTracker
 from pricing_advertising.plots.request_tracker import RequestTracker
 from pricing_advertising.plots.reward_tracker import RewardTracker
 from pricing_advertising.plots.run_data import log_run_data
+from pricing_advertising.training.warmup_policy import sync_warmup_policy as _sync_warmup_policy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -264,6 +265,7 @@ class EvalOccupancyCallback(EvalCallback):
         log_to_mlflow: bool = True,  # Whether to log evaluation metrics to MLflow
         baseline_returns: Mapping[str, Sequence[float]]
         | None = None,  # Baseline episode returns drawn as references
+        sync_warmup_policy: bool = False,  # Evaluate with the current policy driving the env warmup
     ) -> None:
         super().__init__(
             eval_env,
@@ -278,6 +280,7 @@ class EvalOccupancyCallback(EvalCallback):
         )
 
         self.log_to_mlflow = log_to_mlflow
+        self.sync_warmup_policy = sync_warmup_policy
 
         self._metrics = EpisodeMetrics(split="val", log_to_mlflow=self.log_to_mlflow)
         # Days of the episode in progress for each env: the trackers accept one whole episode at a time
@@ -337,6 +340,9 @@ class EvalOccupancyCallback(EvalCallback):
     def _on_step(self) -> bool:
         # - Save the previous best mean reward
         previous_best = self.best_mean_reward
+        # Same condition as EvalCallback: the evaluation resets the envs, which run their warmup
+        if self.sync_warmup_policy and self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+            _sync_warmup_policy(self.eval_env, self.model.policy, deterministic=self.deterministic)
         # Call the parent class's _on_step() method to continue training
         continue_training = super()._on_step()
 

@@ -43,6 +43,23 @@ with any training environment seed (`seed + index` for each training run).
 
 Parent and child MLflow runs record `n_eval_envs` and `eval_episodes`.
 
+### Warmup
+
+`warmup_days` (60 in `pricing_advertising/__main__.py`, 0 disables it) simulates that many
+days before `start_simulation` at every environment reset, so the hotel is not empty on the
+first day. Warmup days are not part of the episode: no steps, no reward, no loss, no plots,
+and day indices and axes still start at `start_simulation`. Only occupancy, demand and BAR
+levels of the nights from `start_simulation` on are kept.
+
+- The warmup actions come from a frozen copy of the current policy: training environments
+	refresh it at every rollout start, evaluation environments at every evaluation
+	(deterministic). Episodes that end mid-rollout reset with the policy of that rollout.
+- Baselines in the PPO reference lines use their own policy during warmup.
+- Request calendars include the warmup days, so a seed's calendar differs from the one
+	generated with `warmup_days=0`.
+- `PricingEnv` needs `set_warmup_policy(callable)` when `warmup_days > 0` (not needed with
+	`bar_update_mode` set). Observations passed to the policy are not normalized.
+
 ### Formatting, Linting and Testing
 
 You can configure Ruff by editing the `.ruff.toml` file. It is currently set to the default configuration.

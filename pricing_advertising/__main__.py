@@ -49,6 +49,7 @@ if __name__ == "__main__":
     avg_num_requests = 60  # Average number of requests per day
     allow_category_alternative = True  # Both False disables alternatives (baseline)
     allow_period_alternative = True
+    warmup_days = 60  # Days simulated before start_simulation to avoid the empty-hotel transient
 
     # ----- Derived simulation parameters ---------
     n_eval_envs = len(eval_seeds)
@@ -100,6 +101,7 @@ if __name__ == "__main__":
         avg_num_requests=avg_num_requests,
         allow_category_alternative=allow_category_alternative,
         allow_period_alternative=allow_period_alternative,
+        warmup_days=warmup_days,
     )
     print(f"Final eval mean reward (mean over {len(SEEDS)} seeds): {final_mean_reward:.3f}")
 

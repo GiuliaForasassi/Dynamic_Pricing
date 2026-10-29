@@ -1,6 +1,7 @@
 import random
 from calendar import isleap
 from collections import Counter
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import date, timedelta
 from typing import Any, Literal, cast
@@ -60,11 +61,16 @@ class PricingEnv(gym.Env):
         bar_update_mode: Literal["never", "always"] | None = None,
         # Evaluation: every reset() restarts the dynamics RNGs from `seed`, so each episode is replayed identically.
         reseed_on_reset: bool = False,
+        # Days simulated before start_simulation at every reset() to fill the hotel; they are not
+        # part of the episode (no reward, no step, no index shift). Needs a warmup_policy.
+        warmup_days: int = 0,
     ) -> None:
         if bar_update_mode not in (None, "never", "always"):
             raise ValueError("bar_update_mode must be None, 'never' or 'always'.")
         if reseed_on_reset and seed is None:
             raise ValueError("reseed_on_reset requires a seed.")
+        if isinstance(warmup_days, bool) or not isinstance(warmup_days, int) or warmup_days < 0:
+            raise ValueError("warmup_days must be a non-negative integer.")
 
         # Validate the simulation period
         if start_simulation > end_simulation:
@@ -84,6 +90,10 @@ class PricingEnv(gym.Env):
         self.start_simulation = start_simulation
         self.end_simulation = end_simulation
         self.total_days = (end_simulation - start_simulation).days + 1
+        self.warmup_days = warmup_days
+        self.warmup_start = start_simulation - timedelta(days=warmup_days)
+        # Maps the last observation to an action; frozen, so nothing is learned during warmup
+        self.warmup_policy: Callable[[dict[str, Any]], np.ndarray] | None = None
 
         self.window_span_days = (
             NUM_WINDOWS * WINDOW_SIZE
@@ -183,19 +193,26 @@ class PricingEnv(gym.Env):
 
         # Instantiate the request generator and acceptance model
         if request_generator is not None and (
-            request_generator.start_simulation > start_simulation
+            request_generator.start_simulation > self.warmup_start
             or request_generator.end_simulation < end_simulation
             or request_generator.extended_end_simulation < self.extended_end_simulation
         ):
             raise ValueError(
                 "The request generator must cover the simulation period and extended booking horizon."
             )
+        warmup_seasonality = np.array(
+            [
+                self.get_seasonality(self.warmup_start + timedelta(days=day_idx))
+                for day_idx in range(warmup_days)
+            ],
+            dtype=self.seasonality_array.dtype,
+        )
         self.request_generator = request_generator or RequestGenerator(
             self.avg_num_requests,
-            start_simulation,
+            self.warmup_start,
             end_simulation,
             extended_end_simulation=self.extended_end_simulation,
-            seasonality_array=self.seasonality_array,
+            seasonality_array=np.concatenate([warmup_seasonality, self.seasonality_array]),
             num_category1_rooms=self.hotel.get_num_rooms_per_category(RoomCategory.CATEGORY1),
             num_category2_rooms=self.hotel.get_num_rooms_per_category(RoomCategory.CATEGORY2),
             num_category3_rooms=self.hotel.get_num_rooms_per_category(RoomCategory.CATEGORY3),
@@ -217,6 +234,23 @@ class PricingEnv(gym.Env):
             booking_window=BOOKING_WINDOW,
         )
         self.acceptance_model.rng = self.acceptance_rng
+
+        # Separate environment covering [warmup_start, start_simulation) that shares calendar,
+        # acceptance model and RNGs; reset() runs it and copies the resulting state.
+        self._warmup_env: PricingEnv | None = None
+        if warmup_days > 0:
+            self._warmup_env = PricingEnv(
+                start_simulation=self.warmup_start,
+                end_simulation=start_simulation - timedelta(days=1),
+                hotel=self.hotel,
+                avg_num_requests=self.avg_num_requests,
+                request_generator=self.request_generator,
+                acceptance_model=self.acceptance_model,
+                allow_category_alternative=allow_category_alternative,
+                allow_period_alternative=allow_period_alternative,
+                bar_update_mode=bar_update_mode,
+            )
+            self.acceptance_model.rng = self.acceptance_rng
 
         # --------- Variables for tracking requests and prices ---------
         # Store final requests and prices for tracker access
@@ -634,8 +668,45 @@ class PricingEnv(gym.Env):
         self.last_final_prices = np.array([], dtype=float)
         self.last_day_avg_price = 0.0
 
+        if self._warmup_env is not None:
+            self._run_warmup(self._warmup_env)
+
         # Return the initial observation and info
         return self.get_observation(), {}
+
+    # ------------- Warmup ------------------
+    def set_warmup_policy(self, policy: Callable[[dict[str, Any]], np.ndarray] | None) -> None:
+        self.warmup_policy = policy
+
+    # Simulates the days before start_simulation and keeps only the state of the nights from
+    # start_simulation on (occupancy, demand, BAR levels).
+    def _run_warmup(self, warmup_env: "PricingEnv") -> None:
+        policy = self.warmup_policy
+        if policy is None and self.bar_update_mode is None:
+            raise RuntimeError("warmup_days > 0 requires a warmup_policy (see set_warmup_policy).")
+
+        warmup_env.np_rng = self.np_rng
+        warmup_env.alternative_rng = self.alternative_rng
+        warmup_env.acceptance_rng = self.acceptance_rng
+        warmup_env.acceptance_model.rng = self.acceptance_rng
+
+        observation, _ = warmup_env.reset()
+        terminated = False
+        while not terminated:
+            # Same value as the real env before its first day (progress is clipped to 0)
+            observation["today"][:] = 0.0
+            # Baselines with a forced BAR update ignore the action
+            action = (
+                np.zeros(self.action_space.shape, dtype=np.float32)
+                if policy is None
+                else policy(observation)
+            )
+            observation, _, terminated, _, _ = warmup_env.step(action)
+
+        kept = self.window_span_days
+        self.occupancy[:, :kept] = warmup_env.occupancy[:, self.warmup_days :]
+        self.demand[:, :kept] = warmup_env.demand[:, self.warmup_days :]
+        self.bar_levels[:, :kept] = warmup_env.bar_levels[:, self.warmup_days :]
 
     # --------- Hotel Availability and Occupancy -----------
     # Method to check hotel availability for a given request

@@ -26,6 +26,7 @@ import pricing_advertising.environment.__init__  # noqa: F401
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.plots.plot_callback import EvalOccupancyCallback, PlotCallback
 from pricing_advertising.training.baseline_returns import evaluate_baseline_returns
+from pricing_advertising.training.warmup_policy import WarmupPolicyCallback, sync_warmup_policy
 from pricing_advertising.utils.constants import SEEDS
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
 
@@ -66,6 +67,7 @@ def run_simulation(
     net_arch: list[int] | dict[str, list[int]] | None = None,
     run_name: str = "PPO_vec_normalize",
     evaluate_baselines: bool = True,  # Draw constant/always-increment/random returns in the eval plot
+    warmup_days: int = 0,  # Days simulated before start_simulation with the frozen policy (no reward/loss)
 ) -> float:
     # --------- Checks ----------------
     if n_envs <= 0:
@@ -78,6 +80,8 @@ def run_simulation(
         or eval_frequency <= 0
     ):
         raise ValueError("eval_frequency must be a positive integer.")
+    if isinstance(warmup_days, bool) or not isinstance(warmup_days, int) or warmup_days < 0:
+        raise ValueError("warmup_days must be a non-negative integer.")
 
     # -------------- Seeds setup ----------------
     # Each training environment gets a distinct request seed
@@ -149,6 +153,7 @@ def run_simulation(
                 "request_scenario_mode": "fixed_per_environment",
                 "allow_category_alternative": allow_category_alternative,
                 "allow_period_alternative": allow_period_alternative,
+                "warmup_days": warmup_days,
             }
         )
 
@@ -173,6 +178,7 @@ def run_simulation(
             avg_num_requests=avg_num_requests,
             allow_category_alternative=allow_category_alternative,
             allow_period_alternative=allow_period_alternative,
+            warmup_days=warmup_days,
         )
 
         train_factories = [
@@ -266,15 +272,16 @@ def run_simulation(
             log_path=str(output_dir / "eval_logs"),
             log_to_mlflow=True,
             baseline_returns=baseline_returns,
+            sync_warmup_policy=warmup_days > 0,
         )
 
         # ------------ List of callbacks ------------------
-        callback = CallbackList(
-            [
-                plot_callback,
-                eval_callback,
-            ]
-        )
+        callbacks = [plot_callback, eval_callback]
+        if warmup_days > 0:
+            callbacks.append(WarmupPolicyCallback())
+            # The first reset happens inside learn(), before any rollout starts
+            sync_warmup_policy(vec_env, model.policy, deterministic=False)
+        callback = CallbackList(callbacks)
 
         # ------------ Training ------------------
         # Start the training process
@@ -293,6 +300,8 @@ def run_simulation(
         best_model = PPO.load(best_model_path, env=eval_env) if best_model_path.exists() else model
 
         # Evaluation of the best model on eval_env
+        if warmup_days > 0:
+            sync_warmup_policy(eval_env, best_model.policy, deterministic=True)
         mean_reward, std_reward = evaluate_policy(
             best_model,
             eval_env,
