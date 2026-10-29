@@ -32,6 +32,53 @@ class PPOOverrides(TypedDict, total=False):
     net_arch: list[int] | dict[str, list[int]]
 
 
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"eval_frequency": 0}, "eval_frequency must be a positive integer"),
+        ({"eval_frequency": -1}, "eval_frequency must be a positive integer"),
+        ({"eval_frequency": True}, "eval_frequency must be a positive integer"),
+        ({"eval_frequency": 1.5}, "eval_frequency must be a positive integer"),
+        ({"eval_seeds": []}, "At least one evaluation seed"),
+        ({"eval_seeds": [100, 100]}, "Evaluation seeds must be distinct"),
+        ({"eval_seeds": [43]}, "distinct from the training seeds"),
+        ({"eval_seeds": [2**32]}, "Seeds must belong to the interval"),
+    ],
+)
+def test_invalid_ppo_evaluation_configuration_fails_before_starting_run(
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, int | float | list[int]],
+    message: str,
+) -> None:
+    from pricing_advertising.training import ppo_training as training_module
+
+    mlflow = MagicMock()
+    monkeypatch.setattr(training_module, "mlflow", mlflow)
+    parameters = dict(
+        total_timesteps=4,
+        n_envs=2,
+        n_steps=2,
+        learning_rate=3e-4,
+        gamma=0.995,
+        n_epochs=1,
+        policy="MultiInputPolicy",
+        start_simulation=START,
+        end_simulation=END,
+        num_category1_rooms=2,
+        num_category2_rooms=2,
+        num_category3_rooms=2,
+        seed=42,
+        eval_seeds=[100, 101],
+        eval_frequency=2,
+    )
+    parameters.update(overrides)
+    with pytest.raises(ValueError, match=message):
+        training_module.run_simulation(**parameters)
+    mlflow.start_run.assert_not_called()
+
+
+@pytest.mark.parametrize("eval_frequency", [2, 3])
+@pytest.mark.parametrize("n_envs", [1, 2])
 @pytest.mark.parametrize("allow_category", [False, True])
 @pytest.mark.parametrize("allow_period", [False, True])
 @pytest.mark.parametrize(
@@ -57,7 +104,14 @@ class PPOOverrides(TypedDict, total=False):
     ids=["ppo-defaults", "symmetric-network", "separate-networks"],
 )
 def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
-    make_env, monkeypatch, tmp_path, allow_category, allow_period, ppo_kwargs: PPOOverrides
+    make_env,
+    monkeypatch,
+    tmp_path,
+    allow_category,
+    allow_period,
+    ppo_kwargs: PPOOverrides,
+    n_envs: int,
+    eval_frequency: int,
 ):
     from pricing_advertising.training import ppo_training as training_module
 
@@ -67,6 +121,8 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     monkeypatch.setattr(training_module, "mlflow", mlflow)
     monkeypatch.setattr(training_module, "MLflowOutputFormat", lambda: MagicMock())
     normalizers = []
+    callbacks = []
+    eval_seeds = [100, 101, 102]
 
     def make_normalizer(env, **kwargs):
         normalizer = VecNormalize(env, **kwargs)
@@ -78,12 +134,17 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
         for factory in factories:
             assert factory.keywords["allow_category_alternative"] is allow_category
             assert factory.keywords["allow_period_alternative"] is allow_period
+        if normalizers:
+            assert [factory.keywords["seed"] for factory in factories] == eval_seeds
+            assert all(factory.keywords["reseed_on_reset"] for factory in factories)
         price = 100.0 if not normalizers else 200.0
         return DummyVecEnv([lambda: make_env(price=price)[0] for _ in factories])
 
     def make_evaluation(*args, **kwargs):
         kwargs["log_to_mlflow"] = False
-        return module.EvalOccupancyCallback(*args, **kwargs)
+        callback = module.EvalOccupancyCallback(*args, **kwargs)
+        callbacks.append(callback)
+        return callback
 
     monkeypatch.setattr(training_module, "VecNormalize", make_normalizer)
     monkeypatch.setattr(training_module, "SubprocVecEnv", make_vector)
@@ -92,22 +153,21 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     )
     monkeypatch.setattr(training_module, "EvalOccupancyCallback", make_evaluation)
     mean_reward = training_module.run_simulation(
-        total_timesteps=4,
-        n_envs=1,
+        total_timesteps=4 * n_envs,
+        n_envs=n_envs,
         n_steps=2,
         learning_rate=3e-4,
         gamma=0.995,
         n_epochs=1,
         policy="MultiInputPolicy",
-        eval_episodes=1,
         start_simulation=START,
         end_simulation=END,
         num_category1_rooms=2,
         num_category2_rooms=2,
         num_category3_rooms=2,
         seed=42,
-        eval_seed=43,
-        eval_frequency=2,
+        eval_seeds=eval_seeds,
+        eval_frequency=eval_frequency,
         avg_num_requests=5,
         allow_category_alternative=allow_category,
         allow_period_alternative=allow_period,
@@ -115,9 +175,26 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     )
     assert mean_reward == 600.0
     mlflow.start_run.assert_called_once_with(
-        run_name=ppo_kwargs.get("run_name", "PPO_vec_normalize")
+        run_name=ppo_kwargs.get("run_name", "PPO_vec_normalize"), nested=True
     )
     training, evaluation = normalizers
+    assert training.num_envs == n_envs
+    assert evaluation.num_envs == len(eval_seeds)
+    assert callbacks[0].n_eval_episodes == len(eval_seeds)
+    assert callbacks[0].eval_freq == eval_frequency
+    effective_eval_frequency = eval_frequency * n_envs
+    assert callbacks[0].evaluations_timesteps == list(
+        range(effective_eval_frequency, 4 * n_envs + 1, effective_eval_frequency)
+    )
+    assert all(len(returns) == len(eval_seeds) for returns in callbacks[0].evaluations_results)
+    logged_params = {
+        key: value
+        for call in mlflow.log_params.call_args_list
+        for key, value in call.args[0].items()
+    }
+    assert logged_params["n_eval_envs"] == logged_params["eval_episodes"] == len(eval_seeds)
+    assert logged_params["eval_frequency"] == eval_frequency
+    assert logged_params["effective_eval_frequency"] == effective_eval_frequency
     assert training.gamma == evaluation.gamma == 0.995
     assert training.norm_obs is evaluation.norm_obs is False
     assert training.norm_reward is True
@@ -149,7 +226,7 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     )
     assert restored_model.observation_space["calendar"].shape == (2,)
     actions, _ = restored_model.predict(training.get_original_obs(), deterministic=True)
-    assert actions.shape == (1, 3, 2, 4)
+    assert actions.shape == (n_envs, 3, 2, 4)
     mlflow.log_metric.assert_any_call("final_eval_mean_reward", 600.0)
     logged_params = {}
     for call in mlflow.log_params.call_args_list:
@@ -501,9 +578,47 @@ def test_train_callback_keeps_terminal_info_and_ignores_partial_episode(
 
         assert len(texts) == 4  # Richieste, reward, occupancy, prezzi.
         assert all("episode_00000_" in path for path in texts)
-        assert not artifacts
+        assert not [path for path in artifacts if not path.startswith("aggregation_data/")]
     finally:
         vec.close()
+
+
+def test_evaluation_with_several_envs_keeps_episodes_separate(make_env, logged):
+    metrics, texts, artifacts = logged
+    training_env, _ = make_env()
+    eval_envs = [make_env(price=price, collect_artifacts=True)[0] for price in (100.0, 300.0)]
+    training = VecMonitor(DummyVecEnv([lambda: training_env]))
+    evaluation = VecMonitor(DummyVecEnv([lambda env=env: env for env in eval_envs]))
+    model = ZeroPolicy(evaluation)
+    callback = module.EvalOccupancyCallback(
+        evaluation, n_eval_episodes=2, eval_freq=1, best_model_save_path=None, log_path=None
+    )
+    callback.init_callback(model)
+    callback.on_training_start({}, {})
+
+    try:
+        training.reset()
+        _, _, _, infos = training.step(np.zeros((1, *training.action_space.shape)))
+        callback.update_locals({"infos": infos})
+        model.num_timesteps = 2
+        assert callback.on_step()
+        callback.on_training_end()
+    finally:
+        training.close()
+        evaluation.close()
+
+    for env_idx in range(2):
+        assert f"eval_data/00000002_timesteps/env_{env_idx:02d}/episode_00000.json" in artifacts
+    rewards = [
+        [float(row["reward"]) for row in csv.DictReader(StringIO(texts[path]))]
+        for path in (
+            "episodes/val/episode_00000_reward.csv",
+            "episodes/val/episode_00001_reward.csv",
+        )
+    ]
+    assert rewards == [[100.0, 200.0], [300.0, 600.0]]
+    returns = {value for key, value, _ in metrics if key.startswith("episode_return/")}
+    assert returns == {600.0}  # mean of the two episodes: (300 + 900) / 2
 
 
 def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, logged, monkeypatch):

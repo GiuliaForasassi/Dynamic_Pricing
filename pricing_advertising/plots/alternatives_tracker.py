@@ -21,6 +21,7 @@ from pricing_advertising.plots.alternatives_plots import (
     UNAVAILABLE,
     log_alternative_figures,
 )
+from pricing_advertising.plots.run_data import log_run_data
 from pricing_advertising.requests.request import (
     ALTERNATIVE_TYPES,
     CATEGORY_ALTERNATIVES,
@@ -270,4 +271,14 @@ class AlternativesTracker:
             occupancy_pct=self._occupancy_sum / episodes,
             requests=self._requests_sum / episodes,
             num_episodes=episodes,
+        )
+        log_run_data(
+            f"alternatives_{self.split}",
+            {
+                "num_episodes": episodes,
+                "totals": (self._totals_sum / episodes).tolist(),
+                "by_checkin": (self._by_checkin_sum / episodes).tolist(),
+                "occupancy_pct": (self._occupancy_sum / episodes).tolist(),
+                "requests": (self._requests_sum / episodes).tolist(),
+            },
         )

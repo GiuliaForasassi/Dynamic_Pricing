@@ -50,9 +50,8 @@ def run_simulation(
     n_epochs: int,  # Number of optimization passes on the same rollout
     policy: str,  # Policy architecture for the PPO agent
     # ------------ Eval parameters ----------
-    eval_episodes: int,  # Number of episodes to run during evaluation
-    eval_frequency: int,  # Frequency (in timesteps) at which to run evaluation
-    eval_seed: int | None = None,
+    eval_frequency: int,  # Vectorized training steps between evaluations
+    eval_seeds: list[int],  # One evaluation env (one episode per evaluation) for each seed
     # ---------- Other parameters ----------
     avg_num_requests: int = 250,  # Average number of requests per day
     price_plot_request_dates: list[tuple[int, int, int]]
@@ -73,27 +72,36 @@ def run_simulation(
         raise ValueError("n_envs deve essere positivo.")
     if avg_num_requests <= 0:
         raise ValueError("avg_num_requests deve essere positivo.")
+    if (
+        isinstance(eval_frequency, bool)
+        or not isinstance(eval_frequency, int)
+        or eval_frequency <= 0
+    ):
+        raise ValueError("eval_frequency must be a positive integer.")
 
     # -------------- Seeds setup ----------------
     # Each training environment gets a distinct request seed
     # Generate a list of seeds for each training environment
     train_request_seeds = [seed + index for index in range(n_envs)]
 
-    # If no evaluation seed is provided, use the first seed after the training seeds
-    if eval_seed is None:
-        eval_seed = seed + n_envs
+    if not eval_seeds:
+        raise ValueError("At least one evaluation seed is required.")
+    if len(set(eval_seeds)) != len(eval_seeds):
+        raise ValueError("Evaluation seeds must be distinct.")
 
-    # Ensure the evaluation seed is distinct from the training seeds
-    if eval_seed in train_request_seeds:
-        raise ValueError("The evaluation seed must be distinct from the training seeds.")
+    # Ensure the evaluation seeds are distinct from the training seeds
+    if set(eval_seeds) & set(train_request_seeds):
+        raise ValueError("The evaluation seeds must be distinct from the training seeds.")
 
     # Compatibility with generators and libraries that use 32-bit seeds.
-    if any(value < 0 or value >= 2**32 for value in [*train_request_seeds, eval_seed]):
+    if any(value < 0 or value >= 2**32 for value in [*train_request_seeds, *eval_seeds]):
         raise ValueError("Seeds must belong to the interval [0, 2**32).")
+    n_eval_envs = len(eval_seeds)
+    n_eval_episodes = n_eval_envs
 
     # ------------ MLFLOW SETUP ------------
     mlflow.set_experiment("PricingEnv_Simulation")
-    with mlflow.start_run(run_name=run_name) as run:
+    with mlflow.start_run(run_name=run_name, nested=True) as run:
         # Define the output directory for saving final model, best model and evaluation logs
         output_dir = Path("models") / "vec_normalize" / run.info.run_id
         best_model_dir = output_dir / "best_model"
@@ -125,7 +133,10 @@ def run_simulation(
                 "ent_coef": ent_coef,
                 "gae_lambda": gae_lambda,
                 "clip_range": clip_range,
-                "eval_episodes": eval_episodes,
+                "n_eval_envs": n_eval_envs,
+                "eval_episodes": n_eval_episodes,
+                "eval_frequency": eval_frequency,
+                "effective_eval_frequency": eval_frequency * n_envs,
                 "seed": seed,
                 "start_simulation": start_simulation,
                 "end_simulation": end_simulation,
@@ -134,7 +145,7 @@ def run_simulation(
                 "num_category3_rooms": num_category3_rooms,
                 "avg_num_requests": avg_num_requests,
                 "train_request_seeds": str(train_request_seeds),
-                "eval_request_seed": eval_seed,
+                "eval_request_seeds": str(list(eval_seeds)),
                 "request_scenario_mode": "fixed_per_environment",
                 "allow_category_alternative": allow_category_alternative,
                 "allow_period_alternative": allow_period_alternative,
@@ -192,6 +203,7 @@ def run_simulation(
             "artifact_snapshot_dates": [date(*value) for value in (price_plot_request_dates or [])],
         }
 
+        # One env per eval seed, each with its own fixed calendar and dynamics replayed at every evaluation
         eval_env = VecMonitor(
             SubprocVecEnv(
                 [
@@ -199,13 +211,14 @@ def run_simulation(
                         gym.make,
                         "PricingEnv-v0",
                         seed=eval_seed,
+                        reseed_on_reset=True,
                         **eval_env_kwargs,
                     )
+                    for eval_seed in eval_seeds
                 ],
                 start_method="fork",
             )
         )
-        eval_env.seed(eval_seed)
         eval_env = VecNormalize(
             eval_env, training=False, norm_obs=False, norm_reward=False, gamma=gamma
         )
@@ -239,16 +252,14 @@ def run_simulation(
 
         # Evaluation callback for evaluating the model
         baseline_returns = (
-            evaluate_baseline_returns(
-                env_kwargs, eval_seed=eval_seed, episodes=eval_episodes, seed=seed
-            )
+            evaluate_baseline_returns(env_kwargs, eval_seeds=eval_seeds, seed=seed)
             if evaluate_baselines
             else None
         )
         eval_callback = EvalOccupancyCallback(
             eval_env,
             eval_freq=eval_frequency,
-            n_eval_episodes=eval_episodes,
+            n_eval_episodes=n_eval_episodes,
             deterministic=True,
             render=False,
             best_model_save_path=str(best_model_dir),
@@ -285,7 +296,7 @@ def run_simulation(
         mean_reward, std_reward = evaluate_policy(
             best_model,
             eval_env,
-            n_eval_episodes=eval_episodes,
+            n_eval_episodes=n_eval_episodes,
             deterministic=True,
         )
 

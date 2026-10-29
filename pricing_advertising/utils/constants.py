@@ -18,6 +18,9 @@ SEEDS = [
     23261443,
 ]
 
+# Evaluation environments shared by every run, so that all evaluations are comparable
+EVAL_SEEDS = [1_000_001, 1_000_002, 1_000_003, 1_000_004]
+
 ############### REQUEST PARAMETERS ################
 
 # Maximum number of days a client can stay
@@ -110,6 +113,8 @@ NUM_WINDOWS = 12
 BOOKING_WINDOW = NUM_WINDOWS * WINDOW_SIZE
 
 ################# TIMESTEPS for simulation ####################
+TOTAL_TIMESTEPS_1K = 1_000
+TOTAL_TIMESTEPS_30K = 30_000
 TOTAL_TIMESTEPS_500K = 500_000
 TOTAL_TIMESTEPS_1M = 1_000_000
 TOTAL_TIMESTEPS_2M = 2_000_000

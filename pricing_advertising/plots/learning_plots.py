@@ -55,6 +55,25 @@ class ActionStatistics:
             "action_clipped_high_fraction": float(self.clipped_high[-1].mean()),
         }
 
+    def to_dict(self) -> dict[str, list]:
+        return {
+            "timesteps": list(self.timesteps),
+            **{
+                name: [value.tolist() for value in getattr(self, name)]
+                for name in ("mean", "std", "clipped_low", "clipped_high")
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, list]) -> ActionStatistics:
+        return cls(
+            timesteps=[int(step) for step in data["timesteps"]],
+            **{
+                name: [np.asarray(value, dtype=float) for value in data[name]]
+                for name in ("mean", "std", "clipped_low", "clipped_high")
+            },
+        )
+
 
 def _category_season_grid(
     title: str, ylabel: str, num_categories: int
@@ -205,6 +224,7 @@ def policy_evolution_figure(curves_by_checkpoint: Mapping[int, np.ndarray]) -> F
 def eval_return_figure(
     returns_by_checkpoint: Mapping[int, Sequence[float]],
     baselines: Mapping[str, Sequence[float]] | None = None,
+    title: str = "Evaluation return against baselines (same evaluation environments)",
 ) -> Figure:
     """Evaluation return per checkpoint (mean +/- std over episodes) against baseline returns."""
     checkpoints = sorted(returns_by_checkpoint)
@@ -229,7 +249,7 @@ def eval_return_figure(
     panel.set(xlabel="Training timesteps", ylabel="Episode return (EUR)")
     panel.grid(True, alpha=0.25)
     panel.legend(fontsize=9)
-    fig.suptitle("Evaluation return against baselines (same evaluation calendar)")
+    fig.suptitle(title)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     return fig
 

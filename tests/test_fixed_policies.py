@@ -33,6 +33,34 @@ def make_env() -> PricingEnv:
 
 
 @pytest.mark.usefixtures("short_simulation")
+def test_reseed_on_reset_replays_the_same_episode() -> None:
+    env = PricingEnv(
+        diagnostics.START,
+        diagnostics.END,
+        Hotel(*diagnostics.ROOMS),
+        avg_num_requests=diagnostics.AVG_NUM_REQUESTS,
+        seed=42,
+        reseed_on_reset=True,
+    )
+    action = np.full(env.action_space.shape, 0.5, dtype=np.float32)
+    returns = []
+    for _ in range(2):
+        env.reset()
+        done, total = False, 0.0
+        while not done:
+            _, reward, done, _, _ = env.step(action)
+            total += reward
+        returns.append(total)
+    env.close()
+    assert returns[0] == returns[1]
+
+    with pytest.raises(ValueError, match="requires a seed"):
+        PricingEnv(
+            diagnostics.START, diagnostics.END, Hotel(*diagnostics.ROOMS), reseed_on_reset=True
+        )
+
+
+@pytest.mark.usefixtures("short_simulation")
 def test_episode_preserves_dynamics_and_exports(tmp_path: Path) -> None:
     policy = diagnostics.make_policies(3, 42)["theta=0 (sale piano)"]
     result = diagnostics.run_episode(policy, 42, 0.995)

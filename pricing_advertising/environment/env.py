@@ -58,9 +58,13 @@ class PricingEnv(gym.Env):
         # Baselines only: "never"/"always" force the BAR increment probability to 0/1 and
         # ignore the action; None keeps the policy-driven probabilities.
         bar_update_mode: Literal["never", "always"] | None = None,
+        # Evaluation: every reset() restarts the dynamics RNGs from `seed`, so each episode is replayed identically.
+        reseed_on_reset: bool = False,
     ) -> None:
         if bar_update_mode not in (None, "never", "always"):
             raise ValueError("bar_update_mode must be None, 'never' or 'always'.")
+        if reseed_on_reset and seed is None:
+            raise ValueError("reseed_on_reset requires a seed.")
 
         # Validate the simulation period
         if start_simulation > end_simulation:
@@ -72,6 +76,7 @@ class PricingEnv(gym.Env):
 
         # -------- Random and seed setup --------
         self.seed = seed
+        self.reseed_on_reset = reseed_on_reset
         self._init_dynamics_rngs(seed)
         self.py_rng = random.Random(seed)
 
@@ -594,6 +599,8 @@ class PricingEnv(gym.Env):
         options: dict | None = None,
     ) -> tuple[Any, dict[str, Any]]:
         logger.info("resetting env")
+        if seed is None and self.reseed_on_reset:
+            seed = self.seed
         if seed is not None:
             self.seed = seed
             self._init_dynamics_rngs(seed)

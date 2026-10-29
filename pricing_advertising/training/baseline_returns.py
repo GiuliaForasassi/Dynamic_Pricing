@@ -1,6 +1,6 @@
 """Episode returns of the training-free baselines on the evaluation calendar."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 import gymnasium as gym
@@ -21,17 +21,19 @@ BASELINES: dict[str, tuple[Callable[[gym.spaces.Space, int], Any], _BarUpdateMod
 
 
 def evaluate_baseline_returns(
-    env_kwargs: dict[str, Any], *, eval_seed: int, episodes: int, seed: int
+    env_kwargs: dict[str, Any], *, eval_seeds: Sequence[int], seed: int
 ) -> dict[str, list[float]]:
-    """Raw episode revenue of each baseline, with the environment seeded as the evaluation env."""
+    """Raw episode revenue of each baseline: one episode per evaluation seed, as in the eval envs."""
     returns: dict[str, list[float]] = {}
     for name, (make_policy, bar_update_mode) in BASELINES.items():
-        env = PricingEnv(**env_kwargs, seed=eval_seed, bar_update_mode=bar_update_mode)
-        try:
-            policy = make_policy(env.action_space, seed)
-            returns[name] = []
-            for episode in range(episodes):
-                observation, _ = env.reset(seed=eval_seed if episode == 0 else None)
+        returns[name] = []
+        policy = None
+        for eval_seed in eval_seeds:
+            env = PricingEnv(**env_kwargs, seed=eval_seed, bar_update_mode=bar_update_mode)
+            try:
+                if policy is None:
+                    policy = make_policy(env.action_space, seed)
+                observation, _ = env.reset(seed=eval_seed)
                 total = 0.0
                 done = False
                 while not done:
@@ -40,6 +42,6 @@ def evaluate_baseline_returns(
                     total += float(reward)
                     done = terminated or truncated
                 returns[name].append(total)
-        finally:
-            env.close()
+            finally:
+                env.close()
     return returns

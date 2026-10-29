@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pricing_advertising.pricing_model.bar_table import set_bar_table_from_csv
 from pricing_advertising.training.ppo_training import run_simulation
-from pricing_advertising.utils.constants import SEEDS
+from pricing_advertising.utils.constants import EVAL_SEEDS, SEEDS
 
 
 def main() -> None:
@@ -26,7 +26,8 @@ def main() -> None:
         gamma=0.995,
         n_epochs=10,
         policy="MultiInputPolicy",
-        eval_episodes=1,
+        eval_frequency=250,
+        eval_seeds=EVAL_SEEDS[:1],
         start_simulation=start_simulation,
         end_simulation=end_simulation,
         num_category1_rooms=50,

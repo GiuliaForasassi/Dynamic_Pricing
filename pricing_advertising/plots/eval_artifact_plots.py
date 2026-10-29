@@ -490,6 +490,32 @@ def build_snapshot_metrics(
 # Rate metrics drawn as scatter, mapped to the count metric that sizes the markers.
 RATE_COUNT_KEYS = {"confirmation_rate": "requests", "price_acceptance_rate": "offers"}
 
+# Snapshot metrics averaged over seeds by the parent run of a multi-seed experiment.
+AVERAGED_SNAPSHOT_KEYS = (
+    "day",
+    "requests",
+    "offers",
+    "confirmation_rate",
+    "price_acceptance_rate",
+    "occupancy_pct",
+    "total_occupancy_pct",
+    "bar_prices",
+)
+
+
+# Snapshot metrics of an evaluation episode by snapshot date, as plain lists.
+def snapshot_metrics_by_date(artifact: dict[str, Any]) -> dict[str, dict[str, list]]:
+    steps = artifact["steps"]
+    return {
+        step["snapshot_start_day"]: {
+            key: value.tolist()
+            for key, value in build_snapshot_metrics(steps, step).items()
+            if key in AVERAGED_SNAPSHOT_KEYS
+        }
+        for step in steps
+        if "snapshot_start_day" in step
+    }
+
 
 # ----------- LOG EVAL ARTIFACT PLOTS -----------
 def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:

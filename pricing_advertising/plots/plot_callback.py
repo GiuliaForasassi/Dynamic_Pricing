@@ -13,7 +13,10 @@ from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.plots.acceptance_rate_tracker import AcceptanceRateTracker
 from pricing_advertising.plots.alternatives_tracker import AlternativesTracker
 from pricing_advertising.plots.episode_metrics import EpisodeMetrics
-from pricing_advertising.plots.eval_artifact_plots import log_eval_artifact_plots
+from pricing_advertising.plots.eval_artifact_plots import (
+    log_eval_artifact_plots,
+    snapshot_metrics_by_date,
+)
 from pricing_advertising.plots.learning_plots import (
     ActionStatistics,
     PolicyCurveAccumulator,
@@ -29,6 +32,7 @@ from pricing_advertising.plots.occupancy_tracker import OccupancyTracker
 from pricing_advertising.plots.price_tracker import PriceTracker
 from pricing_advertising.plots.request_tracker import RequestTracker
 from pricing_advertising.plots.reward_tracker import RewardTracker
+from pricing_advertising.plots.run_data import log_run_data
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -240,6 +244,8 @@ class PlotCallback(BaseCallback):
         self._alternatives_tracker.finalize_training()
         if self.log_to_mlflow:
             self._log_action_figures()
+            if self._action_stats.timesteps:
+                log_run_data("train_actions", self._action_stats.to_dict())
 
 
 # -------------------------- EVAL PLOT CALLBACK --------------------------
@@ -274,6 +280,8 @@ class EvalOccupancyCallback(EvalCallback):
         self.log_to_mlflow = log_to_mlflow
 
         self._metrics = EpisodeMetrics(split="val", log_to_mlflow=self.log_to_mlflow)
+        # Days of the episode in progress for each env: the trackers accept one whole episode at a time
+        self._episode_days: dict[int, list[dict[str, Any]]] = {}
         # Cache for the number of rooms per category for each environment index
         self._num_rooms_cache: dict[int, list[int]] = {}
 
@@ -294,6 +302,8 @@ class EvalOccupancyCallback(EvalCallback):
         self._value_steps: dict[int, tuple[list[float], list[float]]] = {}
         self._value_episode_counts: dict[tuple[int, int], int] = {}
         self._round_value_stats: list[dict[str, float]] = []
+        # Snapshot metrics by checkpoint and snapshot date, one entry per evaluation episode
+        self._snapshot_metrics: dict[int, dict[str, list[dict[str, list]]]] = {}
 
     def _get_num_rooms_by_cat(self, env: Any, idx: int) -> list[int]:  # noqa: ANN401
         if idx in self._num_rooms_cache:
@@ -313,11 +323,14 @@ class EvalOccupancyCallback(EvalCallback):
         # - Record the current evaluation step as an artifact.
         self._record_eval_artifact_step(locals_)
 
-        self._metrics.record_day(locals_["info"]["step_metrics"])
+        env_days = self._episode_days.setdefault(int(locals_["i"]), [])
+        env_days.append(locals_["info"]["step_metrics"])
         self._record_learning_step(locals_)
 
-        # - If the evaluation episode is done, signal the end of the episode to all trackers.
+        # - If the evaluation episode is done, pass its days to the trackers and close it.
         if bool(locals_["done"]):
+            for day_metrics in self._episode_days.pop(int(locals_["i"])):
+                self._metrics.record_day(day_metrics)
             self._metrics.end_episode()
 
     # ------------------------------- ON STEP -------------------------------
@@ -441,6 +454,22 @@ class EvalOccupancyCallback(EvalCallback):
         self._metrics.finalize()
         if self.log_to_mlflow:
             self._log_learning_figures()
+            self._log_evaluation_data()
+
+    def _log_evaluation_data(self) -> None:
+        log_run_data(
+            "evaluation",
+            {
+                "eval_returns": {str(step): values for step, values in self._eval_returns.items()},
+                "baseline_returns": self.baseline_returns,
+                "policy_curves": {
+                    str(step): curve.mean().tolist() for step, curve in self._policy_curves.items()
+                },
+                "snapshot_metrics": {
+                    str(step): value for step, value in self._snapshot_metrics.items()
+                },
+            },
+        )
 
     # ------------------------------- RECORD EVAL ARTIFACT STEP -------------------------------
     def _record_eval_artifact_step(
@@ -514,6 +543,8 @@ class EvalOccupancyCallback(EvalCallback):
 
         # Generate and log evaluation artifact plots based on the current artifact.
         log_eval_artifact_plots(artifact)
+        for cutoff, metrics in snapshot_metrics_by_date(artifact).items():
+            self._snapshot_metrics.setdefault(checkpoint, {}).setdefault(cutoff, []).append(metrics)
 
         # Clear the evaluation steps for the current environment index and increment the episode ID.
         self._artifact_episode_steps[env_idx] = []
