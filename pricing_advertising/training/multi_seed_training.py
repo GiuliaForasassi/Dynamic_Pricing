@@ -60,6 +60,7 @@ def run_multi_seed_simulation(
     run_name: str,
     seeds: Sequence[int] = SEEDS,
     eval_seeds: Sequence[int] = EVAL_SEEDS,
+    resolved_config: dict[str, Any] | None = None,
     **simulation_kwargs: Any,  # noqa: ANN401
 ) -> float:
     """Run `run_simulation` once per seed, each in its own child run.
@@ -80,6 +81,8 @@ def run_multi_seed_simulation(
     mlflow.set_experiment("PricingEnv_Simulation")
     client = MlflowClient()
     with mlflow.start_run(run_name=run_name) as parent:
+        if resolved_config is not None:
+            mlflow.log_dict(resolved_config, "resolved_config.json")
         mlflow.log_params(
             {
                 **simulation_kwargs,

@@ -1,5 +1,3 @@
-import runpy
-
 import mlflow
 import numpy as np
 import pytest
@@ -12,10 +10,12 @@ SEEDS = [11, 22, 33]
 
 
 def test_main_derives_evaluation_counts_from_seeds(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
 ) -> None:
+    import json
+
+    from pricing_advertising.__main__ import DEFAULT_CONFIG, main
     from pricing_advertising.pricing_model import bar_table
-    from pricing_advertising.utils import constants
 
     calls = []
 
@@ -23,17 +23,17 @@ def test_main_derives_evaluation_counts_from_seeds(
         calls.append(kwargs)
         return 0.0
 
-    monkeypatch.setattr(constants, "EVAL_SEEDS", [100, 101, 102])
+    values = json.loads(DEFAULT_CONFIG.read_text())
+    values["evaluation"]["eval_seeds"] = [100, 101, 102]
+    config_path = tmp_path / "experiment.json"
+    config_path.write_text(json.dumps(values))
     monkeypatch.setattr(module, "run_multi_seed_simulation", fake_simulation)
     monkeypatch.setattr(bar_table, "set_bar_table_from_csv", lambda path: None)
     monkeypatch.setenv("MLFLOW_TRACKING_URI", mlflow.get_tracking_uri())
 
-    configuration = runpy.run_module("pricing_advertising", run_name="__main__")
+    main(["--config", str(config_path)])
 
-    assert configuration["n_eval_envs"] == configuration["n_eval_episodes"] == 3
-    assert configuration["baseline_eval_episodes"] == 1
     assert calls[0]["eval_seeds"] == [100, 101, 102]
-    assert calls[0]["eval_seeds"] is not constants.EVAL_SEEDS
     assert "eval_episodes" not in calls[0]
     assert "n_eval_envs = 3" in capsys.readouterr().out
 
@@ -129,6 +129,27 @@ def test_multi_seed_forwards_subprocess_option(fake_runs, monkeypatch, options):
             assert call["use_subprocesses"] is options["use_subprocesses"]
         else:
             assert "use_subprocesses" not in call
+
+
+def test_resolved_config_is_logged_only_on_parent(fake_runs):
+    import json
+    from pathlib import Path
+
+    config = {"run": {"run_name": "configured"}, "ppo": {"n_envs": 1}}
+    module.run_multi_seed_simulation(
+        run_name="configured", seeds=SEEDS[:1], eval_seeds=[100], resolved_config=config
+    )
+    client = MlflowClient()
+    experiment = client.get_experiment_by_name("PricingEnv_Simulation")
+    runs = client.search_runs([experiment.experiment_id])
+    parent = next(run for run in runs if run.info.run_name == "configured")
+    child = next(run for run in runs if run.data.tags.get("mlflow.parentRunId"))
+    artifact = client.download_artifacts(parent.info.run_id, "resolved_config.json")
+    assert json.loads(Path(artifact).read_text()) == config
+    assert "resolved_config" not in child.data.params
+    assert "resolved_config.json" not in {
+        item.path for item in client.list_artifacts(child.info.run_id)
+    }
 
 
 def test_parent_run_averages_child_metrics_and_logs_figures(fake_runs):

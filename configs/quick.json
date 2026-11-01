@@ -1,0 +1,41 @@
+{
+  "run": {
+    "run_name": "PPO_quick",
+    "seeds": [400287],
+    "bar_table_path": "../data/bar_table.csv",
+    "tracking_uri": "sqlite:///mlflow.db",
+    "use_subprocesses": false
+  },
+  "simulation": {
+    "start_simulation": "2025-01-01",
+    "end_simulation": "2025-01-28",
+    "num_category1_rooms": 10,
+    "num_category2_rooms": 5,
+    "num_category3_rooms": 3,
+    "avg_num_requests": 10,
+    "warmup_days": 7,
+    "allow_category_alternative": true,
+    "allow_period_alternative": true
+  },
+  "ppo": {
+    "total_timesteps": 256,
+    "n_envs": 1,
+    "n_steps": 64,
+    "learning_rate": 0.0003,
+    "gamma": 0.999,
+    "n_epochs": 1,
+    "batch_size": 32,
+    "ent_coef": 0.0,
+    "gae_lambda": 0.98,
+    "clip_range": 0.2,
+    "net_arch": {"pi": [64, 64], "vf": [64, 64]},
+    "policy": "MultiInputPolicy"
+  },
+  "evaluation": {
+    "eval_frequency": 128,
+    "eval_seeds": [1000001],
+    "price_plot_request_dates": ["2025-01-07", "2025-01-21"],
+    "evaluate_baselines": true
+  },
+  "cancellation": {"daily_probability": 0.005, "price_sensitivity": 1.0, "high_season_multiplier": 0.8}
+}

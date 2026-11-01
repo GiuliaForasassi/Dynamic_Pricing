@@ -18,13 +18,37 @@ Once you have those, you can just run
 make dev-sync
 ```
 
+### Experiment configuration
+
+Each experiment uses a standalone JSON file validated at startup with Pydantic.
+The default is `configs/quick.json`, a short run for testing and profiling. The
+long preset preserves the original PPO experiment:
+
+```bash
+python -m pricing_advertising
+python -m pricing_advertising --config configs/long.json
+python -m pricing_advertising --config configs/quick.json --check-config
+```
+
+Copy either file to create another experiment. Its `run`, `simulation`, `ppo`,
+`evaluation`, and `cancellation` sections specify the entire run; files do not
+inherit or merge settings. An explicit `--config` path is relative to the current
+working directory. `bar_table_path` is relative to the JSON file, while model output
+and a relative SQLite tracking URI remain relative to the working directory. An
+existing `MLFLOW_TRACKING_URI` environment variable overrides the configured URI.
+The parent MLflow run stores the effective configuration as `resolved_config.json`.
+
+Use `run.use_subprocesses: false` to profile training in the main process. The
+quick preset keeps warmup, cancellations, alternatives, baseline comparisons and
+evaluation plots enabled, but is not intended to produce a trained policy.
+Individual categories may have zero rooms; the hotel must have at least one room.
+The number of category slots and the 360-day observation window remain fixed.
+
 ### PPO evaluation configuration
 
-Edit `eval_seeds` in `pricing_advertising/__main__.py` to select the evaluation
-scenarios. It defaults to a copy of `EVAL_SEEDS` from `utils/constants.py`; you can
-replace it in the main with an explicit list, for example `eval_seeds = [1000001, 1000002]`.
-The list must be nonempty, contain distinct seeds in `[0, 2**32)`, and not overlap
-with any training environment seed (`seed + index` for each training run).
+Set `evaluation.eval_seeds` to select evaluation scenarios. The list must be
+nonempty, contain distinct seeds in `[0, 2**32)`, and not overlap with any training
+environment seed (`seed + index` for each training run).
 
 - `n_envs` controls parallel **training** environments only.
 - `n_eval_envs = len(eval_seeds)` and `n_eval_episodes = n_eval_envs` are derived,
@@ -36,16 +60,15 @@ with any training environment seed (`seed + index` for each training run).
 	timesteps is `eval_frequency * n_envs`, recorded in child MLflow runs as
 	`effective_eval_frequency`: `10000` with four training environments means
 	one evaluation every 40,000 total training timesteps.
-- `baseline_eval_episodes` applies only to the commented-out standalone baseline
-	simulations, which use one environment and one `eval_seed`, with random streams
-	continuing across repeated episodes. It does not configure PPO or the baseline
-	reference lines in PPO plots: those already use one episode per `eval_seeds` entry.
+- `evaluation.evaluate_baselines` controls the baseline reference lines in PPO
+	plots. Standalone baseline simulations are separate Python APIs and are not
+	selected by the experiment CLI.
 
 Parent and child MLflow runs record `n_eval_envs` and `eval_episodes`.
 
 ### Warmup
 
-`warmup_days` (60 in `pricing_advertising/__main__.py`, 0 disables it) simulates that many
+`simulation.warmup_days` (60 in the long preset, 0 disables it) simulates that many
 days before `start_simulation` at every environment reset, so the hotel is not empty on the
 first day. Warmup days are not part of the episode: no steps, no reward, no loss, no plots,
 and day indices and axes still start at `start_simulation`. Occupancy, demand and BAR
@@ -63,17 +86,17 @@ bookings when cancellations are enabled.
 
 ### Booking cancellations
 
-Configure `cancellation_config` in `pricing_advertising/__main__.py`:
+Configure the `cancellation` section in the experiment JSON:
 
-```python
-cancellation_config = dict(
-	daily_probability=0.005,
-	price_sensitivity=1.0,
-	high_season_multiplier=0.8,
-)
+```json
+"cancellation": {
+  "daily_probability": 0.005,
+  "price_sensitivity": 1.0,
+  "high_season_multiplier": 0.8
+}
 ```
 
-Set `cancellation_config = None` to disable cancellations throughout the experiment.
+Set `"cancellation": null` to disable cancellations throughout the experiment.
 `run_simulation` constructs `CancellationModel(**cancellation_config)` only when the
 config is not `None`; an empty dictionary enables the model with its defaults.
 The same model is passed to training, evaluation, their warmup environments and
