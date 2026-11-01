@@ -11,7 +11,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from pricing_advertising.plots.alternatives_plots import log_alternative_figures
-from pricing_advertising.plots.eval_artifact_plots import RATE_COUNT_KEYS
+from pricing_advertising.plots.eval_artifact_plots import RATE_COUNT_KEYS, cancellation_figure
 from pricing_advertising.plots.learning_plots import (
     ActionStatistics,
     action_clipping_figure,
@@ -207,11 +207,28 @@ def log_mean_snapshot_figures(evaluations: Sequence[dict[str, Any]]) -> None:
                 {
                     key: _nanmean([episode[key] for episode in snapshots[cutoff]])
                     for key in snapshots[cutoff][0]
+                    if all(key in episode for episode in snapshots[cutoff])
                 }
                 for snapshots in by_seed
                 if snapshots.get(cutoff)
             ]
-            metrics = {key: np.stack([seed[key] for seed in seeds]) for key in seeds[0]}
+            metrics = {
+                key: np.stack([seed[key] for seed in seeds])
+                for key in seeds[0]
+                if all(key in seed for seed in seeds)
+            }
+            if "voided_reservations" in metrics:
+                figure = cancellation_figure(
+                    metrics["day"][0],
+                    _nanmean(metrics["total_reservations"]),
+                    _nanmean(metrics["voided_reservations"]),
+                    title=f"Active reservations as of {cutoff} | Timesteps: {checkpoint}\n"
+                    f"Mean over {len(seeds)} seeds",
+                )
+                _log_figure(
+                    figure,
+                    f"cancellation_plots/{cutoff}/{checkpoint:08d}_timesteps/mean_over_seeds.png",
+                )
             for key, folder, ylabel, ylim in _SNAPSHOT_FIGURES:
                 _snapshot_figure(
                     key,

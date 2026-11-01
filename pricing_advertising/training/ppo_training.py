@@ -25,10 +25,17 @@ import pricing_advertising.environment.__init__  # noqa: F401
 # your imports
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.plots.plot_callback import EvalOccupancyCallback, PlotCallback
+from pricing_advertising.requests.cancellation import CancellationModel
 from pricing_advertising.training.baseline_returns import evaluate_baseline_returns
 from pricing_advertising.training.warmup_policy import WarmupPolicyCallback, sync_warmup_policy
 from pricing_advertising.utils.constants import SEEDS
 from pricing_advertising.utils.mlflow_logger import MLflowOutputFormat
+
+
+def _make_vec_env(factories: list, use_subprocesses: bool) -> DummyVecEnv | SubprocVecEnv:
+    if use_subprocesses:
+        return SubprocVecEnv(factories, start_method="fork")
+    return DummyVecEnv(factories)
 
 
 # ------------ RUN SIMULATION FUNCTION ------------
@@ -68,6 +75,8 @@ def run_simulation(
     run_name: str = "PPO_vec_normalize",
     evaluate_baselines: bool = True,  # Draw constant/always-increment/random returns in the eval plot
     warmup_days: int = 0,  # Days simulated before start_simulation with the frozen policy (no reward/loss)
+    use_subprocesses: bool = True,  # False runs all envs in-process (DummyVecEnv), e.g. for cProfile
+    cancellation_config: dict[str, Any] | None = None,
 ) -> float:
     # --------- Checks ----------------
     if n_envs <= 0:
@@ -82,6 +91,9 @@ def run_simulation(
         raise ValueError("eval_frequency must be a positive integer.")
     if isinstance(warmup_days, bool) or not isinstance(warmup_days, int) or warmup_days < 0:
         raise ValueError("warmup_days must be a non-negative integer.")
+    cancellation_model = (
+        CancellationModel(**cancellation_config) if cancellation_config is not None else None
+    )
 
     # -------------- Seeds setup ----------------
     # Each training environment gets a distinct request seed
@@ -154,8 +166,19 @@ def run_simulation(
                 "allow_category_alternative": allow_category_alternative,
                 "allow_period_alternative": allow_period_alternative,
                 "warmup_days": warmup_days,
+                "cancellation_enabled": cancellation_model is not None
+                and cancellation_model.daily_probability > 0,
             }
         )
+        if cancellation_model is not None:
+            mlflow.log_params(
+                {
+                    "cancellation_daily_probability": cancellation_model.daily_probability,
+                    "cancellation_price_sensitivity": cancellation_model.price_sensitivity,
+                    "cancellation_high_season_multiplier": cancellation_model.high_season_multiplier,
+                    "cancellation_reference_prices": str(cancellation_model.reference_prices),
+                }
+            )
 
         # ------------ Logger setup ------------
         logger = Logger(
@@ -179,6 +202,7 @@ def run_simulation(
             allow_category_alternative=allow_category_alternative,
             allow_period_alternative=allow_period_alternative,
             warmup_days=warmup_days,
+            cancellation_model=cancellation_model,
         )
 
         train_factories = [
@@ -191,12 +215,7 @@ def run_simulation(
             for request_seed in train_request_seeds
         ]
 
-        vec_env = VecMonitor(
-            SubprocVecEnv(
-                train_factories,
-                start_method="fork",
-            )
-        )
+        vec_env = VecMonitor(_make_vec_env(train_factories, use_subprocesses))
         vec_env.seed(seed)
         vec_env = VecNormalize(
             vec_env, norm_obs=False, norm_reward=True, gamma=gamma, clip_reward=10.0
@@ -210,21 +229,17 @@ def run_simulation(
         }
 
         # One env per eval seed, each with its own fixed calendar and dynamics replayed at every evaluation
-        eval_env = VecMonitor(
-            SubprocVecEnv(
-                [
-                    partial(
-                        gym.make,
-                        "PricingEnv-v0",
-                        seed=eval_seed,
-                        reseed_on_reset=True,
-                        **eval_env_kwargs,
-                    )
-                    for eval_seed in eval_seeds
-                ],
-                start_method="fork",
+        eval_factories = [
+            partial(
+                gym.make,
+                "PricingEnv-v0",
+                seed=eval_seed,
+                reseed_on_reset=True,
+                **eval_env_kwargs,
             )
-        )
+            for eval_seed in eval_seeds
+        ]
+        eval_env = VecMonitor(_make_vec_env(eval_factories, use_subprocesses))
         eval_env = VecNormalize(
             eval_env, training=False, norm_obs=False, norm_reward=False, gamma=gamma
         )

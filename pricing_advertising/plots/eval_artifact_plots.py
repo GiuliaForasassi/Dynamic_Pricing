@@ -6,6 +6,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import mlflow
 import numpy as np
+from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 
 from pricing_advertising.pricing_model.bar_table import max_price
@@ -220,19 +221,23 @@ def _bar_increment_probabilities(
     return probabilities
 
 
-def log_bar_by_advance(artifact: dict[str, Any]) -> None:
+def log_bar_by_advance(
+    artifact: dict[str, Any],
+    metrics_by_day: dict[str, dict[str, np.ndarray]] | None = None,
+) -> None:
     """Plot updated BAR levels, actual increases by category, and probabilities against advance."""
     steps = artifact["steps"]
     checkpoint = int(artifact["checkpoint_timesteps"])
     env_idx = int(artifact["env_index"])
     episode_id = int(artifact["episode_id"])
     snapshots = {step["snapshot_start_day"]: step for step in steps if "snapshot_start_day" in step}
+    metrics_by_day = metrics_by_day or _metrics_by_snapshot_day(artifact)
 
     for request_day in sorted(set(artifact["snapshot_dates"])):
         snapshot = snapshots[request_day]
         if "max_bar_level" not in snapshot:
             continue
-        metrics = build_snapshot_metrics(steps, snapshot)
+        metrics = metrics_by_day[request_day]
         advance = np.arange(len(metrics["day"]))
         rooms = np.asarray(snapshot["rooms_by_category"], dtype=float)
         levels = np.asarray(snapshot["bar_levels_by_category"])
@@ -463,7 +468,7 @@ def build_snapshot_metrics(
         raise ValueError("Total hotel capacity is not positive.")
 
     # Return a dictionary containing all the computed metrics for the snapshot period.
-    return {
+    metrics = {
         "day": np.arange(first_day, first_day + size),
         "requests": requests,  # Total number of requests received for each day in the snapshot period.
         "offers": offers,
@@ -485,6 +490,70 @@ def build_snapshot_metrics(
             -1, 3
         ),  # List of booked price points as (day, category, price) tuples.
     }
+    if "voided_reservations_by_category" in snapshot:
+        voided = np.asarray(snapshot["voided_reservations_by_category"], dtype=float)
+        _validate_cancellation_counts(occupancy, voided)
+        metrics["total_reservations"] = occupancy.copy()
+        metrics["voided_reservations"] = voided
+    return metrics
+
+
+def _validate_cancellation_counts(total: np.ndarray, voided: np.ndarray) -> None:
+    if total.ndim != 2 or total.shape != voided.shape:
+        raise ValueError("Cancellation snapshot dimensions must match total reservations.")
+    if (
+        not np.isfinite(total).all()
+        or not np.isfinite(voided).all()
+        or np.any(total < 0)
+        or np.any(voided < 0)
+        or np.any(voided > total)
+    ):
+        raise ValueError(
+            "Voided reservations must be finite counts between zero and total reservations."
+        )
+
+
+def cancellation_figure(
+    days: np.ndarray, total: np.ndarray, voided: np.ndarray, *, title: str
+) -> Figure:
+    _validate_cancellation_counts(total, voided)
+    if days.ndim != 1 or not days.size or total.shape[1] != days.size:
+        raise ValueError("Cancellation counts must align with stay days.")
+    figure = Figure(figsize=(12, 3 * len(total)), layout="constrained")
+    axes = figure.subplots(len(total), 1, sharex=True, squeeze=False)
+    edges = np.concatenate((days[:1] - 0.5, days + 0.5))
+    for category, panel in enumerate(axes.flat):
+        kept = total[category] - voided[category]
+        panel.stackplot(
+            edges,
+            np.append(kept, kept[-1]),
+            np.append(voided[category], voided[category, -1]),
+            labels=("Non-voided reservations", "Voided reservations (pending cancellation)"),
+            colors=("#459a91", "#e47761"),
+            step="post",
+            alpha=0.8,
+        )
+        panel.plot(
+            days,
+            total[category],
+            color="#333333",
+            linewidth=1.2,
+            drawstyle="steps-mid",
+            label="Total reservations",
+        )
+        panel.set(
+            title=f"Category {category + 1}",
+            ylabel="Reservations (count)",
+            xlim=(edges[0], edges[-1]),
+            ylim=(0, max(1.0, float(total[category].max()) * 1.15)),
+        )
+        panel.xaxis.set_major_locator(MaxNLocator(integer=True))
+        panel.yaxis.set_major_locator(MaxNLocator(integer=True))
+        panel.grid(axis="y", alpha=0.25)
+    axes[0, 0].legend(loc="upper center", ncols=3, fontsize=8)
+    axes[-1, 0].set_xlabel("Stay day (1 = simulation start)")
+    figure.suptitle(title)
+    return figure
 
 
 # Rate metrics drawn as scatter, mapped to the count metric that sizes the markers.
@@ -500,20 +569,28 @@ AVERAGED_SNAPSHOT_KEYS = (
     "occupancy_pct",
     "total_occupancy_pct",
     "bar_prices",
+    "total_reservations",
+    "voided_reservations",
 )
+
+
+# Snapshot metrics of an evaluation episode, computed once per snapshot date.
+def _metrics_by_snapshot_day(artifact: dict[str, Any]) -> dict[str, dict[str, np.ndarray]]:
+    steps = artifact["steps"]
+    return {
+        step["snapshot_start_day"]: build_snapshot_metrics(steps, step)
+        for step in steps
+        if "snapshot_start_day" in step
+    }
 
 
 # Snapshot metrics of an evaluation episode by snapshot date, as plain lists.
 def snapshot_metrics_by_date(artifact: dict[str, Any]) -> dict[str, dict[str, list]]:
-    steps = artifact["steps"]
     return {
-        step["snapshot_start_day"]: {
-            key: value.tolist()
-            for key, value in build_snapshot_metrics(steps, step).items()
-            if key in AVERAGED_SNAPSHOT_KEYS
+        day: {
+            key: value.tolist() for key, value in metrics.items() if key in AVERAGED_SNAPSHOT_KEYS
         }
-        for step in steps
-        if "snapshot_start_day" in step
+        for day, metrics in _metrics_by_snapshot_day(artifact).items()
     }
 
 
@@ -558,11 +635,12 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
     episode_id = int(artifact["episode_id"])
 
     # - Log proposed price by advance for specific dates.
+    metrics_by_day = _metrics_by_snapshot_day(artifact)
     log_proposed_price_by_advance(
         artifact,
         [date.fromisoformat(value) for value in sorted(expected_dates)],
     )
-    log_bar_by_advance(artifact)
+    log_bar_by_advance(artifact, metrics_by_day)
 
     # Specifications for different types of plots: key, folder, Y-axis label, Y-axis limits.
     specifications = [
@@ -601,8 +679,24 @@ def log_eval_artifact_plots(artifact: dict[str, Any]) -> None:
     # - Iterate over each snapshot to generate plots for policy diagnostics and specified metrics.
     for snapshot in snapshots:
         cutoff = snapshot["snapshot_start_day"]
-        metrics = build_snapshot_metrics(steps, snapshot)
+        metrics = metrics_by_day[cutoff]
         x = metrics["day"]
+        if "voided_reservations" in metrics:
+            cancellation_plot = cancellation_figure(
+                x,
+                metrics["total_reservations"],
+                metrics["voided_reservations"],
+                title=f"Active reservations as of {cutoff} | Timesteps: {checkpoint}\n"
+                f"Env: {env_idx} | Episode: {episode_id}",
+            )
+            try:
+                mlflow.log_figure(
+                    cancellation_plot,
+                    f"cancellation_plots/{cutoff}/{checkpoint:08d}_timesteps/"
+                    f"env_{env_idx:02d}/episode_{episode_id:05d}.png",
+                )
+            finally:
+                plt.close(cancellation_plot)
 
         coefficients = np.asarray(snapshot["policy_coefficients"])
         before = np.asarray(snapshot["bar_levels_before_update"])

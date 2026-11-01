@@ -1,6 +1,8 @@
 import cProfile
 import io
+import os
 import pstats
+import re
 from datetime import date
 from pathlib import Path
 
@@ -10,6 +12,9 @@ from pricing_advertising.utils.constants import EVAL_SEEDS, SEEDS
 
 
 def main() -> None:
+    # Same backend as `make mlflow-ui`; the ./mlruns file store is no longer accepted by MLflow.
+    os.environ.setdefault("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+
     # Load bar table
     csv_path = Path("data") / "bar_table.csv"
     set_bar_table_from_csv(csv_path)
@@ -34,6 +39,7 @@ def main() -> None:
         num_category2_rooms=50,
         num_category3_rooms=50,
         seed=SEEDS[0],
+        use_subprocesses=False,  # cProfile only sees the main process
     )
 
 
@@ -47,7 +53,8 @@ if __name__ == "__main__":
 
     s = io.StringIO()
     stats = pstats.Stats(profiler, stream=s)
-    stats.strip_dirs().sort_stats("tottime").print_stats("pricing_advertising")
+    package_path = str(Path(__file__).resolve().parents[1]) + os.sep
+    stats.sort_stats("tottime").print_stats(re.escape(package_path), 40)
     print(s.getvalue())
 
     stats.dump_stats("training_profile.prof")

@@ -10,6 +10,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from pricing_advertising.environment.env import PricingEnv
 from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.pricing_model import bar_table
+from pricing_advertising.requests.cancellation import CancellationModel
 from pricing_advertising.training.baseline_returns import evaluate_baseline_returns
 from pricing_advertising.training.warmup_policy import (
     FrozenPolicy,
@@ -77,8 +78,9 @@ def test_warmup_fills_the_hotel_without_changing_the_episode():
     assert steps == env.total_days
 
 
-def test_warmup_state_matches_an_environment_started_earlier():
-    env = make_env(warmup_days=WARMUP_DAYS)
+@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+def test_warmup_state_matches_an_environment_started_earlier(cancellation_model):
+    env = make_env(warmup_days=WARMUP_DAYS, cancellation_model=cancellation_model)
     env.set_warmup_policy(constant_policy(env, 0.5))
     env.reset()
 
@@ -86,6 +88,7 @@ def test_warmup_state_matches_an_environment_started_earlier():
         start_simulation=START - timedelta(days=WARMUP_DAYS),
         request_generator=env.request_generator,
         seed=42,
+        cancellation_model=cancellation_model,
     )
     earlier.reset()
     action = constant_policy(earlier, 0.5)(None)
@@ -99,6 +102,7 @@ def test_warmup_state_matches_an_environment_started_earlier():
             getattr(env, name)[:, :kept], getattr(earlier, name)[:, WARMUP_DAYS:][:, :kept]
         )
     assert not env.occupancy[:, kept:].any()
+    assert env.cancellation_rng.bit_generator.state == earlier.cancellation_rng.bit_generator.state
 
 
 def test_warmup_uses_the_policy_observations_with_zero_progress():
@@ -124,8 +128,11 @@ def test_forced_bar_update_baselines_need_no_warmup_policy(mode):
     assert env.occupancy[:, 0].sum() > 0
 
 
-def test_reseeded_reset_replays_the_same_warmup():
-    env = make_env(warmup_days=WARMUP_DAYS, reseed_on_reset=True)
+@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+def test_reseeded_reset_replays_the_same_warmup(cancellation_model):
+    env = make_env(
+        warmup_days=WARMUP_DAYS, reseed_on_reset=True, cancellation_model=cancellation_model
+    )
     env.set_warmup_policy(constant_policy(env, 0.5))
     env.reset()
     first = env.occupancy.copy(), env.bar_levels.copy()

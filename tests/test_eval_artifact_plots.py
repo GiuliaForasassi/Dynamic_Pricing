@@ -12,6 +12,35 @@ from pricing_advertising.plots.eval_artifact_plots import (
 )
 
 
+@pytest.mark.parametrize("num_days", [1, 4])
+def test_cancellation_stackplot_matches_total_without_double_counting(num_days):
+    days = np.arange(59, 59 + num_days)
+    total = np.asarray([[5] * num_days, [3] * num_days, [0] * num_days])
+    voided = np.asarray([[2] * num_days, [3] * num_days, [0] * num_days])
+    figure = plots.cancellation_figure(days, total, voided, title="Cancellation test")
+    assert len(figure.axes) == 3
+    for category, panel in enumerate(figure.axes):
+        assert len(panel.collections) == 2
+        assert panel.get_xlim() == (58.5, float(days[-1]) + 0.5)
+        np.testing.assert_array_equal(panel.lines[0].get_ydata(), total[category])
+        assert panel.lines[0].get_drawstyle() == "steps-mid"
+        kept_vertices = panel.collections[0].get_paths()[0].vertices
+        voided_vertices = panel.collections[1].get_paths()[0].vertices
+        assert kept_vertices[:, 1].max() == total[category, 0] - voided[category, 0]
+        assert voided_vertices[:, 1].max() == total[category, 0]
+        assert panel.get_ylim()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "voided", [[[2, 0]] * 3, [[-1, 0]] * 3, [[float("nan"), 0]] * 3, [[0]] * 3]
+)
+def test_invalid_cancellation_stack_counts_are_rejected(voided):
+    with pytest.raises(ValueError, match="Cancellation snapshot|Voided reservations"):
+        plots.cancellation_figure(
+            np.array([1, 2]), np.ones((3, 2)), np.asarray(voided), title="Invalid"
+        )
+
+
 @pytest.mark.parametrize("stored_seasons", [False, True])
 def test_six_policy_curves_and_stay_season_probabilities(monkeypatch, stored_seasons):
     start = date(2025, 6, 30)
@@ -131,6 +160,7 @@ def test_plot_dates_follow_snapshots_and_labels_distinguish_nights(
                 snapshot_start_day=day.isoformat(),
                 rooms_by_category=[2, 2, 2],
                 occupancy_by_category=grid,
+                voided_reservations_by_category=grid,
                 bar_prices_by_category=grid,
                 bar_levels_before_update=grid,
                 bar_levels_by_category=grid,
@@ -155,7 +185,12 @@ def test_plot_dates_follow_snapshots_and_labels_distinguish_nights(
 
     proposed_paths = [path for path in logged if path.startswith("proposed_price_by_advance/")]
     assert [path.split("/")[1] for path in proposed_paths] == snapshot_dates
-    assert len(logged) == (7 + int(with_history)) * len(snapshot_dates)
+    assert len(logged) == (8 + int(with_history)) * len(snapshot_dates)
+    cancellation_paths = [path for path in logged if path.startswith("cancellation_plots/")]
+    assert cancellation_paths == [
+        f"cancellation_plots/{day}/00000800_timesteps/env_00/episode_00000.png"
+        for day in snapshot_dates
+    ]
     assert not any(path.startswith("request_plots/") for path in logged)
     for path, ylabel in logged.items():
         folder = path.split("/")[0]

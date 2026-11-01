@@ -50,6 +50,11 @@ if __name__ == "__main__":
     allow_category_alternative = True  # Both False disables alternatives (baseline)
     allow_period_alternative = True
     warmup_days = 60  # Days simulated before start_simulation to avoid the empty-hotel transient
+    cancellation_config = dict(
+        daily_probability=0.005,
+        price_sensitivity=1.0,
+        high_season_multiplier=0.8,
+    )
 
     # ----- Derived simulation parameters ---------
     n_eval_envs = len(eval_seeds)
@@ -102,6 +107,7 @@ if __name__ == "__main__":
         allow_category_alternative=allow_category_alternative,
         allow_period_alternative=allow_period_alternative,
         warmup_days=warmup_days,
+        cancellation_config=cancellation_config,
     )
     print(f"Final eval mean reward (mean over {len(SEEDS)} seeds): {final_mean_reward:.3f}")
 

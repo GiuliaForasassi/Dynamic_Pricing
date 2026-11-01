@@ -52,6 +52,38 @@ def snapshot_metrics(seed):
     }
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_parent_cancellation_stacks_average_episodes_then_seeds(monkeypatch, legacy):
+    from pricing_advertising.plots import aggregate_plots
+
+    def episode(total, voided):
+        values = snapshot_metrics(1)
+        values["total_reservations"] = [[total] * 4] * 3
+        values["voided_reservations"] = [[voided] * 4] * 3
+        return values
+
+    episodes = [episode(8, 4)] if not legacy else [snapshot_metrics(1)]
+    evaluations = [
+        {"snapshot_metrics": {"10": {"2025-01-09": [episode(2, 1), episode(4, 1)]}}},
+        {"snapshot_metrics": {"10": {"2025-01-09": episodes}}},
+    ]
+    figures = {}
+    monkeypatch.setattr(
+        aggregate_plots.mlflow, "log_figure", lambda fig, path: figures.update({path: fig})
+    )
+    aggregate_plots.log_mean_snapshot_figures(evaluations)
+    path = "cancellation_plots/2025-01-09/00000010_timesteps/mean_over_seeds.png"
+    if legacy:
+        assert path not in figures
+        return
+    figure = figures[path]
+    assert len(figure.axes) == 3
+    for panel in figure.axes:
+        np.testing.assert_array_equal(panel.lines[0].get_ydata(), [5.5] * 4)
+        assert panel.collections[0].get_paths()[0].vertices[:, 1].max() == 3.0
+        assert panel.collections[1].get_paths()[0].vertices[:, 1].max() == 5.5
+
+
 @pytest.fixture
 def fake_runs(monkeypatch):
     def fake_run_simulation(*, seed, eval_seeds, run_name, **kwargs):
@@ -75,6 +107,28 @@ def fake_runs(monkeypatch):
         return float(seed)
 
     monkeypatch.setattr(module, "run_simulation", fake_run_simulation)
+
+
+@pytest.mark.parametrize("options", [{}, {"use_subprocesses": True}, {"use_subprocesses": False}])
+def test_multi_seed_forwards_subprocess_option(fake_runs, monkeypatch, options):
+    calls = []
+    fake_run = module.run_simulation
+
+    def capture_run(**kwargs):
+        calls.append(kwargs)
+        return fake_run(**kwargs)
+
+    monkeypatch.setattr(module, "run_simulation", capture_run)
+    module.run_multi_seed_simulation(
+        run_name="subprocess_option", seeds=SEEDS[:2], eval_seeds=[100, 101], **options
+    )
+
+    assert len(calls) == 2
+    for call in calls:
+        if "use_subprocesses" in options:
+            assert call["use_subprocesses"] is options["use_subprocesses"]
+        else:
+            assert "use_subprocesses" not in call
 
 
 def test_parent_run_averages_child_metrics_and_logs_figures(fake_runs):

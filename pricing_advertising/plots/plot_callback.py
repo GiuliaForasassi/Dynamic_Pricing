@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,7 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.plots.acceptance_rate_tracker import AcceptanceRateTracker
 from pricing_advertising.plots.alternatives_tracker import AlternativesTracker
+from pricing_advertising.plots.cancellation_tracker import CancellationTracker
 from pricing_advertising.plots.episode_metrics import EpisodeMetrics
 from pricing_advertising.plots.eval_artifact_plots import (
     log_eval_artifact_plots,
@@ -95,6 +97,9 @@ class PlotCallback(BaseCallback):
 
         # - Initialize trackers for occupancy, requests, rewards, prices, and acceptance rate
         self._occupancy_tracker = OccupancyTracker(split="train", log_to_mlflow=self.log_to_mlflow)
+        self._cancellation_tracker = CancellationTracker(
+            split="train", log_to_mlflow=self.log_to_mlflow
+        )
         self._request_tracker = RequestTracker(split="train", log_to_mlflow=self.log_to_mlflow)
         self._reward_tracker = RewardTracker(split="train", log_to_mlflow=self.log_to_mlflow)
         self._price_tracker = PriceTracker(split="train", log_to_mlflow=self.log_to_mlflow)
@@ -168,6 +173,11 @@ class PlotCallback(BaseCallback):
 
         # - Extract the metrics for the tracked environment from infos
         metrics = self.locals["infos"][env_idx]["step_metrics"]
+        self._cancellation_tracker.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            num_cancelled=metrics.get("num_cancelled", 0),
+        )
 
         # - Record the extracted metrics for various trackers
         # Each tracker records the relevant metrics for each day
@@ -214,6 +224,8 @@ class PlotCallback(BaseCallback):
         # - End episode detection and logging
         dones = self.locals.get("dones")
         if dones is not None and dones[env_idx].item():
+            self._cancellation_tracker.end_episode()
+            self._cancellation_tracker.log_step_metrics(step=self.num_timesteps)
             self._occupancy_tracker.end_episode()
             self._occupancy_tracker.log_step_metrics(step=self.num_timesteps)
 
@@ -237,6 +249,7 @@ class PlotCallback(BaseCallback):
     # -------------------------- ON TRAINING END --------------------------
     # Call at the end of training to finalize all trackers
     def _on_training_end(self) -> None:
+        self._cancellation_tracker.finalize_training()
         self._occupancy_tracker.finalize_training()
         self._request_tracker.finalize_training()
         self._reward_tracker.finalize_training()
@@ -538,9 +551,9 @@ class EvalOccupancyCallback(EvalCallback):
             "steps": steps,  # List of evaluation steps for the current episode
         }
 
-        # Log the artifact dictionary to MLflow as a JSON file.
-        mlflow.log_dict(
-            artifact,
+        # Compact dumps uses the C encoder; mlflow.log_dict's indent=2 forces the slow Python one.
+        mlflow.log_text(
+            json.dumps(artifact, separators=(",", ":"), default=str),
             (
                 f"eval_data/{checkpoint:08d}_timesteps/"
                 f"env_{env_idx:02d}/episode_{episode_id:05d}.json"

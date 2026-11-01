@@ -1,9 +1,10 @@
 import csv
+import json
 from copy import deepcopy
 from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -17,6 +18,7 @@ from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.plots import plot_callback as module
 from pricing_advertising.plots.eval_artifact_plots import build_snapshot_metrics
 from pricing_advertising.pricing_model import bar_table
+from pricing_advertising.requests.cancellation import CancellationModel
 from pricing_advertising.requests.request import Request
 
 START = date(2025, 12, 30)
@@ -30,6 +32,7 @@ class PPOOverrides(TypedDict, total=False):
     gae_lambda: float
     clip_range: float
     net_arch: list[int] | dict[str, list[int]]
+    cancellation_config: dict[str, Any] | None
 
 
 @pytest.mark.parametrize(
@@ -43,11 +46,12 @@ class PPOOverrides(TypedDict, total=False):
         ({"eval_seeds": [100, 100]}, "Evaluation seeds must be distinct"),
         ({"eval_seeds": [43]}, "distinct from the training seeds"),
         ({"eval_seeds": [2**32]}, "Seeds must belong to the interval"),
+        ({"cancellation_config": {"daily_probability": -0.1}}, "Daily cancellation probability"),
     ],
 )
 def test_invalid_ppo_evaluation_configuration_fails_before_starting_run(
     monkeypatch: pytest.MonkeyPatch,
-    overrides: dict[str, int | float | list[int]],
+    overrides: dict[str, Any],
     message: str,
 ) -> None:
     from pricing_advertising.training import ppo_training as training_module
@@ -92,6 +96,12 @@ def test_invalid_ppo_evaluation_configuration_fails_before_starting_run(
             gae_lambda=0.9,
             clip_range=0.1,
             net_arch=[16, 16],
+            cancellation_config=dict(
+                daily_probability=0.01,
+                price_sensitivity=0.7,
+                high_season_multiplier=0.6,
+                reference_prices=(100.0, 200.0, 300.0),
+            ),
         ),
         dict(
             batch_size=2,
@@ -99,9 +109,11 @@ def test_invalid_ppo_evaluation_configuration_fails_before_starting_run(
             gae_lambda=0.98,
             clip_range=0.3,
             net_arch=dict(pi=[16, 8], vf=[32, 16]),
+            cancellation_config={},
         ),
+        dict(batch_size=2, cancellation_config=None),
     ],
-    ids=["ppo-defaults", "symmetric-network", "separate-networks"],
+    ids=["ppo-defaults", "symmetric-network", "separate-networks", "cancellations-disabled"],
 )
 def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     make_env,
@@ -116,6 +128,13 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     from pricing_advertising.training import ppo_training as training_module
 
     monkeypatch.chdir(tmp_path)
+    cancellation_config = ppo_kwargs.get("cancellation_config")
+    original_config = deepcopy(cancellation_config)
+    cancellation_model = (
+        CancellationModel(**cancellation_config) if cancellation_config is not None else None
+    )
+    model_constructor = MagicMock(wraps=CancellationModel)
+    monkeypatch.setattr(training_module, "CancellationModel", model_constructor)
     mlflow = MagicMock()
     mlflow.start_run.return_value.__enter__.return_value.info.run_id = "normalization_test"
     monkeypatch.setattr(training_module, "mlflow", mlflow)
@@ -134,6 +153,7 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
         for factory in factories:
             assert factory.keywords["allow_category_alternative"] is allow_category
             assert factory.keywords["allow_period_alternative"] is allow_period
+            assert factory.keywords["cancellation_model"] == cancellation_model
         if normalizers:
             assert [factory.keywords["seed"] for factory in factories] == eval_seeds
             assert all(factory.keywords["reseed_on_reset"] for factory in factories)
@@ -152,6 +172,8 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
         training_module, "PlotCallback", lambda **kwargs: module.PlotCallback(log_to_mlflow=False)
     )
     monkeypatch.setattr(training_module, "EvalOccupancyCallback", make_evaluation)
+    baseline_evaluation = MagicMock(wraps=training_module.evaluate_baseline_returns)
+    monkeypatch.setattr(training_module, "evaluate_baseline_returns", baseline_evaluation)
     mean_reward = training_module.run_simulation(
         total_timesteps=4 * n_envs,
         n_envs=n_envs,
@@ -174,6 +196,12 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
         **ppo_kwargs,
     )
     assert mean_reward == 600.0
+    assert baseline_evaluation.call_args.args[0]["cancellation_model"] == cancellation_model
+    assert cancellation_config == original_config
+    if cancellation_config is None:
+        model_constructor.assert_not_called()
+    else:
+        model_constructor.assert_called_once_with(**cancellation_config)
     mlflow.start_run.assert_called_once_with(
         run_name=ppo_kwargs.get("run_name", "PPO_vec_normalize"), nested=True
     )
@@ -195,6 +223,21 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     assert logged_params["n_eval_envs"] == logged_params["eval_episodes"] == len(eval_seeds)
     assert logged_params["eval_frequency"] == eval_frequency
     assert logged_params["effective_eval_frequency"] == effective_eval_frequency
+    assert logged_params["cancellation_enabled"] is (cancellation_model is not None)
+    if cancellation_model is not None:
+        assert (
+            logged_params["cancellation_daily_probability"] == cancellation_model.daily_probability
+        )
+        assert (
+            logged_params["cancellation_price_sensitivity"] == cancellation_model.price_sensitivity
+        )
+        assert (
+            logged_params["cancellation_high_season_multiplier"]
+            == cancellation_model.high_season_multiplier
+        )
+        assert logged_params["cancellation_reference_prices"] == str(
+            cancellation_model.reference_prices
+        )
     assert training.gamma == evaluation.gamma == 0.995
     assert training.norm_obs is evaluation.norm_obs is False
     assert training.norm_reward is True
@@ -369,8 +412,12 @@ def logged(monkeypatch):
         metrics.append((key, float(value), step))
 
     def log_text(text, artifact_file):
-        assert artifact_file not in texts, "CSV sovrascritto"
-        texts[artifact_file] = text
+        if artifact_file.endswith(".json"):
+            assert artifact_file not in artifacts, "Artifact sovrascritto"
+            artifacts[artifact_file] = json.loads(text)
+        else:
+            assert artifact_file not in texts, "CSV sovrascritto"
+            texts[artifact_file] = text
 
     def log_dict(dictionary, artifact_file):
         assert artifact_file not in artifacts, "Artifact sovrascritto"
@@ -576,7 +623,7 @@ def test_train_callback_keeps_terminal_info_and_ignores_partial_episode(
         ]
         assert daily_reward == [(1, 100.0), (2, 200.0)]
 
-        assert len(texts) == 4  # Richieste, reward, occupancy, prezzi.
+        assert len(texts) == 5
         assert all("episode_00000_" in path for path in texts)
         assert not [path for path in artifacts if not path.startswith("aggregation_data/")]
     finally:
@@ -664,7 +711,7 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
         model.num_timesteps = 2
         assert callback.on_step()
         assert len(artifacts) == 2
-        assert len(figures) == 16
+        assert len(figures) == 18
         assert not any(path.startswith("request_plots/") for path in figures)
 
         for episode in range(2):
@@ -673,6 +720,14 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
             snapshot = artifact["steps"][1]
             assert snapshot["request_day"] == str(END)
             assert snapshot["occupancy_by_category"] == [[0, 2], [0, 1], [0, 0]]
+            cancellation_plot = figures[f"cancellation_plots/{END}/{suffix}.png"]
+            assert len(cancellation_plot.axes) == 3
+            for category, panel in enumerate(cancellation_plot.axes):
+                np.testing.assert_array_equal(panel.lines[0].get_xdata(), [2, 3])
+                np.testing.assert_array_equal(
+                    panel.lines[0].get_ydata(), snapshot["occupancy_by_category"][category]
+                )
+                assert len(panel.collections) == 2
             assert artifact["steps"][0]["requests"][0]["daily_prices"] == [100.0]
             assert [row["daily_prices"] for row in snapshot["requests"]] == [[200.0], [200.0]]
             for folder in ("proposed_price_by_advance", "booked_price_plots"):
@@ -742,6 +797,9 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
                 elif path.startswith(("confirmation_rate_plots/", "price_acceptance_plots/")):
                     assert not panel.lines
                     assert len(panel.collections) == 1
+                elif path.startswith("cancellation_plots/"):
+                    assert len(panel.lines) == 1
+                    assert len(panel.collections) == 2
                 else:
                     assert panel.lines
                     if not path.startswith("proposed_price_by_advance/"):
@@ -757,12 +815,14 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
 
 @pytest.mark.parametrize("split", ["train", "val"])
 @pytest.mark.parametrize("end", [date(2025, 3, 1), date(2025, 3, 11)])
+@pytest.mark.parametrize("cancel", [False, True])
 def test_reward_is_recognized_on_booking_day_in_metrics_and_artifacts(
-    make_env, logged, monkeypatch, split, end
+    make_env, logged, monkeypatch, split, end, cancel
 ):
     metrics, texts, artifacts = logged
     booking_day = date(2025, 2, 28)
     env, _ = make_env(collect_artifacts=True, start=booking_day, end=end)
+    env.cancellation_model = CancellationModel(daily_probability=1.0) if cancel else None
     env.artifact_snapshot_dates = {booking_day}
     env.request_generator.requests_by_day = {
         booking_day: [Request(booking_day, date(2025, 3, 10), 2, 1)]
@@ -797,7 +857,10 @@ def test_reward_is_recognized_on_booking_day_in_metrics_and_artifacts(
             vec.reset()
             for day_index in range(simulation_days):
                 _, rewards, dones, infos = vec.step(np.zeros((1, *vec.action_space.shape)))
-                assert rewards[0] == (220.0 if day_index == 0 else 0.0)
+                expected_reward = (
+                    220.0 if day_index == 0 else (-220.0 if cancel and day_index == 1 else 0.0)
+                )
+                assert rewards[0] == expected_reward
                 payloads.append(deepcopy(infos[0]["eval_artifacts"]))
                 model.num_timesteps += 1
                 callback.update_locals({"infos": infos, "dones": dones})
@@ -812,9 +875,17 @@ def test_reward_is_recognized_on_booking_day_in_metrics_and_artifacts(
         callback.on_training_end()
 
         expected = [220.0] + [0.0] * (simulation_days - 1)
+        if cancel:
+            expected[1] = -220.0
+            event = payloads[1]["cancellations"][0]
+            assert event["booking_id"] == payloads[0]["requests"][0]["booking_id"]
+            assert event["refund_amount"] == event["reward_debit"] == 220.0
+            assert payloads[0]["requests"][0]["confirmed"] is True
         assert [step["step_reward"] for step in payloads] == expected
         snapshot_metrics = build_snapshot_metrics(payloads, payloads[0])
-        np.testing.assert_array_equal(snapshot_metrics["booked_revenue"], expected)
+        np.testing.assert_array_equal(
+            snapshot_metrics["booked_revenue"], [220.0] + [0.0] * (simulation_days - 1)
+        )
         np.testing.assert_array_equal(snapshot_metrics["day"], np.arange(1, simulation_days + 1))
         if end.month == 3 and end.day == 11:
             np.testing.assert_array_equal(
@@ -831,7 +902,18 @@ def test_reward_is_recognized_on_booking_day_in_metrics_and_artifacts(
             if key == f"reward/by_request_day/mean_completed_episodes/{split}"
         ]
         assert daily == list(enumerate(expected, start=1))
-        assert points(metrics, "episode_return", split) == [(simulation_days, 220.0)]
+        cancellation_counts = [0, int(cancel)] + [0] * (simulation_days - 2)
+        cancellation_daily = [
+            (step, value)
+            for key, value, step in metrics
+            if key == f"cancellation_amount/by_cancellation_day/mean_completed_episodes/{split}"
+        ]
+        assert cancellation_daily == list(enumerate(cancellation_counts, start=1))
+        cancellation_rows = csv.DictReader(
+            StringIO(texts[f"episodes/{split}/episode_00000_cancellation.csv"])
+        )
+        assert [int(row["cancellation_amount"]) for row in cancellation_rows] == cancellation_counts
+        assert points(metrics, "episode_return", split) == [(simulation_days, sum(expected))]
     finally:
         vec.close()
 
@@ -886,7 +968,7 @@ def test_eval_callback_logs_once_per_round_and_preserves_episode_artifacts(
 
         assert env.today == START
         assert not env.occupancy.any()
-        assert len(texts) == 16  # Quattro CSV per ciascuno dei quattro episodi.
+        assert len(texts) == 20
 
         for checkpoint, price in [(8, 100.0), (16, 200.0)]:
             for episode in range(2):

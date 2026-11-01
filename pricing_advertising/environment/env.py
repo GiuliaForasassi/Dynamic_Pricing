@@ -3,6 +3,7 @@ from calendar import isleap
 from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any, Literal, cast
 
@@ -20,6 +21,7 @@ from pricing_advertising.hotel.hotel import Hotel
 from pricing_advertising.hotel.room import ROOM_ALTERNATIVES, RoomCategory
 from pricing_advertising.pricing_model.bar_table import get_price, n_levels
 from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
+from pricing_advertising.requests.cancellation import Booking, CancellationModel
 from pricing_advertising.requests.request import ORIGINAL_OFFER, HotelOffer, Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
@@ -64,6 +66,7 @@ class PricingEnv(gym.Env):
         # Days simulated before start_simulation at every reset() to fill the hotel; they are not
         # part of the episode (no reward, no step, no index shift). Needs a warmup_policy.
         warmup_days: int = 0,
+        cancellation_model: CancellationModel | None = None,
     ) -> None:
         if bar_update_mode not in (None, "never", "always"):
             raise ValueError("bar_update_mode must be None, 'never' or 'always'.")
@@ -114,6 +117,9 @@ class PricingEnv(gym.Env):
         self.allow_category_alternative = allow_category_alternative
         self.allow_period_alternative = allow_period_alternative
         self.bar_update_mode = bar_update_mode
+        self.cancellation_model = cancellation_model
+        self._bookings: dict[int, Booking] = {}
+        self._next_booking_id = 0
 
         self.collect_eval_artifacts = collect_eval_artifacts
         self.artifact_snapshot_dates = set(artifact_snapshot_dates or [])
@@ -249,6 +255,7 @@ class PricingEnv(gym.Env):
                 allow_category_alternative=allow_category_alternative,
                 allow_period_alternative=allow_period_alternative,
                 bar_update_mode=bar_update_mode,
+                cancellation_model=cancellation_model,
             )
             self.acceptance_model.rng = self.acceptance_rng
 
@@ -276,10 +283,13 @@ class PricingEnv(gym.Env):
 
     # ---------- Initialize dynamics RNGs ---------------
     def _init_dynamics_rngs(self, seed: int | None) -> None:
-        bar_seed, alternative_seed, acceptance_seed = np.random.SeedSequence(seed).spawn(3)
+        bar_seed, alternative_seed, acceptance_seed, cancellation_seed = np.random.SeedSequence(
+            seed
+        ).spawn(4)
         self.np_rng = np.random.default_rng(bar_seed)
         self.alternative_rng = np.random.default_rng(alternative_seed)
         self.acceptance_rng = np.random.default_rng(acceptance_seed)
+        self.cancellation_rng = np.random.default_rng(cancellation_seed)
 
     # ---------- Get observation ---------------
     # Returns the current observation of the environment, including occupancy, demand, bar levels, and seasonality information
@@ -388,6 +398,7 @@ class PricingEnv(gym.Env):
         action = self._validate_action(action)
         self._offer_events = []
         self._request_outcomes = Counter()
+        cancellations = self._process_cancellations()
         # Generate requests for the current day
         requests = self.request_generator.fetch_requests_for_date(self.today)
 
@@ -427,6 +438,9 @@ class PricingEnv(gym.Env):
         )
         final_requests = self._apply_mask(confirmed_mask, valid_requests)
         final_prices = self._apply_mask(confirmed_mask, tot_prices)
+        booking_ids = self._register_bookings(
+            valid_requests, daily_prices, tot_prices, confirmed_mask
+        )
 
         # --------- Update accepted and rejected requests by day ---------
 
@@ -448,7 +462,16 @@ class PricingEnv(gym.Env):
                 self.rejected_total += rejected_c
 
         # Calculate the revenue of accepted requests
-        reward = self._calculate_reward(final_prices)
+        gross_booking_revenue = self._calculate_reward(final_prices)
+        reward_refund_total = sum(event["reward_debit"] for event in cancellations)
+        reward = gross_booking_revenue - reward_refund_total
+        cancellation_metrics = {
+            "gross_booking_revenue": float(gross_booking_revenue),
+            "refund_total": float(sum(event["refund_amount"] for event in cancellations)),
+            "reward_refund_total": float(reward_refund_total),
+            "num_cancelled": len(cancellations),
+            "cancellations": cancellations,
+        }
 
         # Store for tracker access
         self.last_total_requests = requests
@@ -512,12 +535,16 @@ class PricingEnv(gym.Env):
                 float(np.mean(reservation_offsets)) if reservation_offsets else 0.0
             ),
             "reward": float(reward),
+            **cancellation_metrics,
             "num_offers": len(valid_requests),
             "num_price_accepted": int(np.count_nonzero(accepted_mask)),
             "num_confirmed": len(final_requests),
             # Copie indipendenti dallo stato mutabile dell'ambiente.
             "confirmed_requests": deepcopy(final_requests),
             "confirmed_nightly_prices": final_nightly_prices,
+            "confirmed_booking_ids": [
+                booking_ids.get(int(index)) for index in confirmed_valid_indices
+            ],
             # Every offer proposed today (original or alternative) with its outcome.
             "offer_stats": {
                 "events": self._offer_events,
@@ -568,12 +595,16 @@ class PricingEnv(gym.Env):
                     }
                 )
 
+            for valid_index, booking_id in booking_ids.items():
+                request_rows[int(valid_positions[valid_index])]["booking_id"] = booking_id
+
             payload: dict[str, Any] = {
                 "request_day": self.today.isoformat(),
                 "day_index": int((self.today - self.start_simulation).days),
                 "start_simulation": self.start_simulation.isoformat(),
                 "end_simulation": self.end_simulation.isoformat(),
                 "step_reward": float(reward),
+                **deepcopy(cancellation_metrics),
                 "requests": request_rows,
                 "policy_coefficients": np.asarray(action, dtype=float).tolist(),
             }
@@ -600,6 +631,9 @@ class PricingEnv(gym.Env):
                 payload["snapshot_start_day"] = self.today.isoformat()
                 payload["seasonality_by_day"] = self.seasonality_array[start:stop].tolist()
                 payload["occupancy_by_category"] = self.occupancy[:, start:stop].tolist()
+                payload["voided_reservations_by_category"] = self._voided_reservations(
+                    start, stop
+                ).tolist()
                 payload["bar_levels_by_category"] = levels.tolist()
                 assert bar_before is not None
                 payload["bar_levels_before_update"] = bar_before
@@ -624,6 +658,92 @@ class PricingEnv(gym.Env):
         observation = self.get_observation()
 
         return observation, reward, terminated, False, info
+
+    def _register_bookings(
+        self,
+        offers: np.ndarray,
+        daily_prices: list[list[float]],
+        total_prices: np.ndarray,
+        confirmed_mask: np.ndarray,
+    ) -> dict[int, int]:
+        model = self.cancellation_model
+        if model is None or model.daily_probability == 0:
+            return {}
+        booking_ids = {}
+        for index in np.flatnonzero(confirmed_mask):
+            offer = cast("HotelOffer", offers[int(index)])
+            prices = tuple(float(price) for price in daily_prices[index])
+            probability = model.probability(offer.category, offer.t_reservation, prices)
+            advance = (offer.t_reservation - self.today).days
+            waiting_days = (
+                int(self.cancellation_rng.geometric(probability))
+                if probability > 0 and advance > 1
+                else 0
+            )
+            cancellation_day = (
+                self.today + timedelta(days=waiting_days) if 0 < waiting_days < advance else None
+            )
+            booking_id = self._next_booking_id
+            self._next_booking_id += 1
+            self._bookings[booking_id] = Booking(
+                booking_id=booking_id,
+                booked_on=self.today,
+                category=offer.category,
+                check_in=offer.t_reservation,
+                nightly_prices=prices,
+                total_price=float(total_prices[index]),
+                cancellation_probability=probability,
+                cancellation_day=cancellation_day,
+            )
+            booking_ids[int(index)] = booking_id
+        return booking_ids
+
+    def _process_cancellations(self) -> list[dict[str, Any]]:
+        self._bookings = {
+            booking_id: booking
+            for booking_id, booking in self._bookings.items()
+            if self.today < booking.check_in
+        }
+        events = []
+        for booking in list(self._bookings.values()):
+            if booking.cancellation_day != self.today:
+                continue
+            start = (booking.check_in - self.start_simulation).days
+            stop = start + booking.days_stay
+            occupied = self.occupancy[booking.category.value - 1, start:stop]
+            if start < 0 or stop > self.extended_simulation_days or np.any(occupied <= 0):
+                raise RuntimeError("Cancellation would release unoccupied room nights.")
+            occupied -= 1
+            del self._bookings[booking.booking_id]
+            events.append(
+                {
+                    "booking_id": booking.booking_id,
+                    "booked_on": booking.booked_on.isoformat(),
+                    "cancellation_day": self.today.isoformat(),
+                    "category": booking.category.value,
+                    "check_in": booking.check_in.isoformat(),
+                    "days_stay": booking.days_stay,
+                    "daily_prices": list(booking.nightly_prices),
+                    "total_price": booking.total_price,
+                    "cancellation_probability": booking.cancellation_probability,
+                    "refund_amount": booking.total_price,
+                    "reward_debit": booking.total_price if booking.reward_accounted else 0.0,
+                    "from_warmup": not booking.reward_accounted,
+                }
+            )
+        return events
+
+    def _voided_reservations(self, start: int, stop: int) -> np.ndarray:
+        voided = np.zeros_like(self.occupancy[:, start:stop])
+        for booking in self._bookings.values():
+            if booking.cancellation_day is None or booking.cancellation_day <= self.today:
+                continue
+            check_in = (booking.check_in - self.start_simulation).days
+            first = max(start, check_in)
+            last = min(stop, check_in + booking.days_stay)
+            if first < last:
+                voided[booking.category.value - 1, first - start : last - start] += 1
+        return voided
 
     # ------------- RESET Method ------------------
     # Resets the environment to its initial state at the beginning of an episode
@@ -662,6 +782,8 @@ class PricingEnv(gym.Env):
         self.rejected_total = 0
 
         self.last_total_requests = np.array([], dtype=object)
+        self._bookings.clear()
+        self._next_booking_id = 0
         self.last_valid_requests = np.array([], dtype=object)
         self.last_valid_prices = np.array([], dtype=float)
         self.last_final_requests = np.array([], dtype=object)
@@ -688,6 +810,7 @@ class PricingEnv(gym.Env):
         warmup_env.np_rng = self.np_rng
         warmup_env.alternative_rng = self.alternative_rng
         warmup_env.acceptance_rng = self.acceptance_rng
+        warmup_env.cancellation_rng = self.cancellation_rng
         warmup_env.acceptance_model.rng = self.acceptance_rng
 
         observation, _ = warmup_env.reset()
@@ -707,6 +830,12 @@ class PricingEnv(gym.Env):
         self.occupancy[:, :kept] = warmup_env.occupancy[:, self.warmup_days :]
         self.demand[:, :kept] = warmup_env.demand[:, self.warmup_days :]
         self.bar_levels[:, :kept] = warmup_env.bar_levels[:, self.warmup_days :]
+        self._bookings = {
+            booking_id: replace(booking, reward_accounted=False)
+            for booking_id, booking in warmup_env._bookings.items()  # noqa: SLF001
+            if booking.check_in > self.start_simulation
+        }
+        self._next_booking_id = warmup_env._next_booking_id  # noqa: SLF001
 
     # --------- Hotel Availability and Occupancy -----------
     # Method to check hotel availability for a given request

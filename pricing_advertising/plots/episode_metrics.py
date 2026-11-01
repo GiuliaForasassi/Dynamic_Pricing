@@ -2,6 +2,7 @@ from typing import Any
 
 from pricing_advertising.plots.acceptance_rate_tracker import AcceptanceRateTracker
 from pricing_advertising.plots.alternatives_tracker import AlternativesTracker
+from pricing_advertising.plots.cancellation_tracker import CancellationTracker
 from pricing_advertising.plots.occupancy_tracker import OccupancyTracker
 from pricing_advertising.plots.price_tracker import PriceTracker
 from pricing_advertising.plots.request_tracker import RequestTracker
@@ -14,6 +15,7 @@ class EpisodeMetrics:
 
     def __init__(self, split: str, log_to_mlflow: bool = True) -> None:
         self.occupancy = OccupancyTracker(split=split, log_to_mlflow=log_to_mlflow)
+        self.cancellations = CancellationTracker(split=split, log_to_mlflow=log_to_mlflow)
         self.requests = RequestTracker(split=split, log_to_mlflow=log_to_mlflow)
         self.reward = RewardTracker(split=split, log_to_mlflow=log_to_mlflow)
         self.price = PriceTracker(split=split, log_to_mlflow=log_to_mlflow)
@@ -21,6 +23,7 @@ class EpisodeMetrics:
         self.alternatives = AlternativesTracker(split=split, log_to_mlflow=log_to_mlflow)
         self._trackers = (
             self.occupancy,
+            self.cancellations,
             self.requests,
             self.reward,
             self.price,
@@ -29,6 +32,11 @@ class EpisodeMetrics:
         )
 
     def record_day(self, metrics: dict[str, Any]) -> None:
+        self.cancellations.record_day(
+            day_index=int(metrics["day_index"]),
+            simulation_days=int(metrics["simulation_days"]),
+            num_cancelled=metrics.get("num_cancelled", 0),
+        )
         self.occupancy.record_day(
             day_index=int(metrics["day_index"]),
             simulation_days=int(metrics["simulation_days"]),
