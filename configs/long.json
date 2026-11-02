@@ -13,7 +13,7 @@
     "num_category2_rooms": 50,
     "num_category3_rooms": 30,
     "avg_num_requests": 60,
-    "warmup_days": 60,
+    "warmup_days": 360,
     "allow_category_alternative": true,
     "allow_period_alternative": true
   },
