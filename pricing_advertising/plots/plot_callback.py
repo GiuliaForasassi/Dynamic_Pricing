@@ -173,6 +173,7 @@ class PlotCallback(BaseCallback):
 
         # - Extract the metrics for the tracked environment from infos
         metrics = self.locals["infos"][env_idx]["step_metrics"]
+        warmup = metrics.get("warmup_stay_metrics", {})
         self._cancellation_tracker.record_day(
             day_index=int(metrics["day_index"]),
             simulation_days=int(metrics["simulation_days"]),
@@ -191,6 +192,7 @@ class PlotCallback(BaseCallback):
             simulation_days=int(metrics["simulation_days"]),
             num_requests=int(metrics["num_requests"]),
             request_stays=metrics["request_stays"],
+            warmup_stays=warmup.get("requests"),
         )
         self._reward_tracker.record_day(
             day_index=int(metrics["day_index"]),
@@ -204,6 +206,9 @@ class PlotCallback(BaseCallback):
             simulation_days=int(metrics["simulation_days"]),
             confirmed_requests=metrics["confirmed_requests"],
             confirmed_nightly_prices=metrics["confirmed_nightly_prices"],
+            warmup_revenue=warmup.get("revenue"),
+            warmup_nights=warmup.get("nights"),
+            cancellations=metrics.get("cancellations", ()),
         )
 
         self._acceptance_rate_tracker.record_day(
@@ -220,6 +225,7 @@ class PlotCallback(BaseCallback):
             num_requests=int(metrics["num_requests"]),
             occupancy_pct=float(metrics["occupancy_pct"]),
             offer_stats=metrics["offer_stats"],
+            warmup_by_checkin=warmup.get("offers_by_checkin"),
         )
         # - End episode detection and logging
         dones = self.locals.get("dones")

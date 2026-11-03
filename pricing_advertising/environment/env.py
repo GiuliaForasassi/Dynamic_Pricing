@@ -22,7 +22,7 @@ from pricing_advertising.hotel.room import ROOM_ALTERNATIVES, RoomCategory
 from pricing_advertising.pricing_model.bar_table import get_price, n_levels
 from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.requests.cancellation import Booking, CancellationModel
-from pricing_advertising.requests.request import ORIGINAL_OFFER, HotelOffer, Request
+from pricing_advertising.requests.request import OFFER_TYPES, ORIGINAL_OFFER, HotelOffer, Request
 from pricing_advertising.requests.request_generator import RequestGenerator
 from pricing_advertising.utils.constants import (
     BOOKING_WINDOW,
@@ -552,6 +552,8 @@ class PricingEnv(gym.Env):
                 "num_unavailable": int(self._request_outcomes["unavailable"]),
             },
         }
+        if current_day_index == 0 and self._warmup_env is not None:
+            info["step_metrics"]["warmup_stay_metrics"] = self._warmup_stay_metrics
 
         # For plottings artifacts
         if self.collect_eval_artifacts:
@@ -813,6 +815,12 @@ class PricingEnv(gym.Env):
         warmup_env.cancellation_rng = self.cancellation_rng
         warmup_env.acceptance_model.rng = self.acceptance_rng
 
+        self._warmup_stay_metrics = {
+            "requests": np.zeros(self.total_days, dtype=np.int64),
+            "revenue": np.zeros(self.total_days, dtype=float),
+            "nights": np.zeros(self.total_days, dtype=np.int64),
+            "offers_by_checkin": np.zeros((self.total_days, len(OFFER_TYPES), 3), dtype=np.int64),
+        }
         observation, _ = warmup_env.reset()
         terminated = False
         while not terminated:
@@ -824,7 +832,38 @@ class PricingEnv(gym.Env):
                 if policy is None
                 else policy(observation)
             )
-            observation, _, terminated, _, _ = warmup_env.step(action)
+            observation, _, terminated, _, info = warmup_env.step(action)
+            metrics = info["step_metrics"]
+            for event in metrics["offer_stats"]["events"]:
+                check_in = event["check_in_index"] - self.warmup_days
+                if 0 <= check_in < self.total_days:
+                    row = OFFER_TYPES.index(event["type"])
+                    self._warmup_stay_metrics["offers_by_checkin"][check_in, row] += (
+                        1,
+                        event["price_accepted"],
+                        event["confirmed"],
+                    )
+            for cancellation in metrics["cancellations"]:
+                offset = (date.fromisoformat(cancellation["check_in"]) - self.start_simulation).days
+                for night, price in enumerate(cancellation["daily_prices"]):
+                    stay_day = offset + night
+                    if 0 <= stay_day < self.total_days:
+                        self._warmup_stay_metrics["revenue"][stay_day] -= price
+                        self._warmup_stay_metrics["nights"][stay_day] -= 1
+            for check_in, nights in metrics["request_stays"]:
+                start = max(0, check_in - self.warmup_days)
+                stop = min(self.total_days, check_in - self.warmup_days + nights)
+                if start < stop:
+                    self._warmup_stay_metrics["requests"][start:stop] += 1
+            prices = iter(metrics["confirmed_nightly_prices"])
+            for offer in metrics["confirmed_requests"]:
+                offset = (offer.t_reservation - self.start_simulation).days
+                for night in range(offer.days_stay):
+                    price = next(prices)
+                    stay_day = offset + night
+                    if 0 <= stay_day < self.total_days:
+                        self._warmup_stay_metrics["revenue"][stay_day] += price
+                        self._warmup_stay_metrics["nights"][stay_day] += 1
 
         kept = self.window_span_days
         self.occupancy[:, :kept] = warmup_env.occupancy[:, self.warmup_days :]

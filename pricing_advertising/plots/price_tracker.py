@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import date
 from io import StringIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import mlflow
 import numpy as np
@@ -58,6 +58,9 @@ class PriceTracker:
             Request | HotelOffer
         ],  # List of confirmed requests for the day
         confirmed_nightly_prices: np.ndarray,  # Array of confirmed nightly prices for the day
+        warmup_revenue: np.ndarray | None = None,
+        warmup_nights: np.ndarray | None = None,
+        cancellations: Sequence[dict[str, Any]] = (),
     ) -> None:
         # - Check validity of the input parameters for the day recording.
         if simulation_days <= 0:
@@ -70,6 +73,14 @@ class PriceTracker:
 
         if day_index != self._next_day or not 0 <= day_index < simulation_days:
             raise ValueError("Missing, duplicate, or out-of-sequence day.")
+
+        if warmup_revenue is not None or warmup_nights is not None:
+            if (
+                day_index != 0
+                or np.asarray(warmup_revenue).shape != (simulation_days,)
+                or np.asarray(warmup_nights).shape != (simulation_days,)
+            ):
+                raise ValueError("Invalid warmup prices.")
 
         requests = list(confirmed_requests)
         lengths = [int(request.days_stay) for request in requests]
@@ -122,6 +133,16 @@ class PriceTracker:
 
         self._revenue += daily_revenue
         self._nights += daily_nights
+        if warmup_revenue is not None and warmup_nights is not None:
+            self._revenue += warmup_revenue
+            self._nights += warmup_nights
+        for cancellation in cancellations:
+            offset = (date.fromisoformat(cancellation["check_in"]) - start_simulation).days
+            for night, price in enumerate(cancellation["daily_prices"]):
+                stay_day = offset + night
+                if 0 <= stay_day < simulation_days:
+                    self._revenue[stay_day] -= price
+                    self._nights[stay_day] -= 1
         self._next_day += 1
 
     # --------------------- END OF EPISODE ---------------------

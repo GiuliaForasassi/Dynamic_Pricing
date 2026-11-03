@@ -93,6 +93,7 @@ class AlternativesTracker:
         num_requests: int,
         occupancy_pct: float,
         offer_stats: dict[str, Any],
+        warmup_by_checkin: np.ndarray | None = None,
     ) -> None:
         if simulation_days <= 0:
             raise ValueError("Simulation days must be positive.")
@@ -102,6 +103,13 @@ class AlternativesTracker:
 
         if day_index != self._next_day or day_index >= simulation_days:
             raise ValueError("Missing, duplicate, or out-of-sequence day.")
+
+        if warmup_by_checkin is not None and (
+            day_index != 0
+            or np.asarray(warmup_by_checkin).shape
+            != (simulation_days, len(OFFER_TYPES), _N_DAY_COLUMNS)
+        ):
+            raise ValueError("Invalid warmup offers.")
 
         events = offer_stats["events"]
         outside_window = int(offer_stats["num_outside_booking_window"])
@@ -117,6 +125,8 @@ class AlternativesTracker:
             self._occupancy = np.zeros(simulation_days)
         assert self._by_checkin is not None
         assert self._occupancy is not None
+        if warmup_by_checkin is not None:
+            self._by_checkin += warmup_by_checkin
 
         for event in events:
             row = _ROW_BY_TYPE[event["type"]]

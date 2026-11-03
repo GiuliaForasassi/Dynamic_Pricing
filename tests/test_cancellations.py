@@ -13,6 +13,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from pricing_advertising.enums.enums import RoomCategory
 from pricing_advertising.environment.env import PricingEnv
 from pricing_advertising.hotel.hotel import Hotel
+from pricing_advertising.plots.episode_metrics import EpisodeMetrics
 from pricing_advertising.pricing_model import bar_table
 from pricing_advertising.requests.cancellation import CancellationModel
 from pricing_advertising.requests.request import Request
@@ -326,6 +327,41 @@ def test_warmup_releases_inventory_without_debiting_reward(make_cancellation_env
     assert env._next_booking_id == 2
     assert len(env._bookings) == 1
     assert env._warmup_env.cancellation_rng is env.cancellation_rng
+
+
+@pytest.mark.parametrize("warmup_days", [1, 2])
+def test_stay_day_price_excludes_cancelled_bookings_and_keeps_resales(
+    make_cancellation_env, warmup_days
+):
+    previous = START - timedelta(days=warmup_days)
+    last_warmup_day = START - timedelta(days=1)
+    check_in = START + timedelta(days=3)
+    calendar = {
+        previous: [Request(previous, check_in, 2, 1)],
+        START: [Request(START, check_in, 2, 1)],
+        START + timedelta(days=2): [Request(START + timedelta(days=2), check_in, 2, 1)],
+    }
+    calendar.setdefault(last_warmup_day, []).append(Request(last_warmup_day, START, 2, 2))
+    env = make_cancellation_env(calendar, warmup_days=warmup_days)
+    tracker = EpisodeMetrics(split="val", log_to_mlflow=False)
+    cancellation_origins = []
+    resale_prices = None
+    for day in range(env.total_days):
+        _, _, _, _, info = step_day(env)
+        metrics = info["step_metrics"]
+        cancellation_origins.extend(event["from_warmup"] for event in metrics["cancellations"])
+        if day == 2:
+            resale_prices = metrics["confirmed_nightly_prices"].copy()
+        tracker.record_day(metrics)
+    tracker.end_episode()
+
+    assert cancellation_origins == ([True, False] if warmup_days == 1 else [False])
+    assert resale_prices is not None and len(resale_prices) == 2
+    warmup_price = bar_table.get_price("CATEGORY2", 1)
+    np.testing.assert_array_equal(tracker.price._nights_sum, [1, 1, 0, 1, 1, 0])
+    np.testing.assert_allclose(
+        tracker.price._revenue_sum, [warmup_price, warmup_price, 0, *resale_prices, 0]
+    )
 
 
 @pytest.mark.parametrize("alternative", ["category", "period"])

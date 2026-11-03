@@ -39,6 +39,7 @@ class RequestTracker:
         simulation_days: int,
         num_requests: int,
         request_stays: list[tuple[int, int]],
+        warmup_stays: np.ndarray | None = None,
     ) -> None:
         # - Validate input parameters
         if simulation_days <= 0:
@@ -52,6 +53,11 @@ class RequestTracker:
 
         if num_requests != len(request_stays):
             raise ValueError("Number of requests and stays inconsistent.")
+
+        if warmup_stays is not None and (
+            day_index != 0 or np.asarray(warmup_stays).shape != (simulation_days,)
+        ):
+            raise ValueError("Invalid warmup stays.")
 
         for check_in, nights in request_stays:
             if check_in < day_index or nights <= 0:
@@ -70,6 +76,8 @@ class RequestTracker:
 
         # - Record arrivals and stays for the current day
         self._arrivals[day_index] = num_requests
+        if warmup_stays is not None:
+            self._stays += warmup_stays
 
         for check_in, nights in request_stays:
             stop = min(check_in + nights, simulation_days)

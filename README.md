@@ -70,8 +70,11 @@ Parent and child MLflow runs record `n_eval_envs` and `eval_episodes`.
 
 `simulation.warmup_days` (60 in the long preset, 0 disables it) simulates that many
 days before `start_simulation` at every environment reset, so the hotel is not empty on the
-first day. Warmup days are not part of the episode: no steps, no reward, no loss, no plots,
-and day indices and axes still start at `start_simulation`. Occupancy, demand and BAR
+first day. Warmup days are not part of the episode: no steps, no reward, no loss,
+and day indices and axes still start at `start_simulation`. Stay-day request counts and
+booked mean prices include warmup requests and confirmed bookings for nights within the
+episode; request-day counts exclude warmup arrivals. Booked mean prices exclude cancelled
+bookings, while alternatives by original check-in day include warmup offers. Occupancy, demand and BAR
 levels of the nights from `start_simulation` on are kept, along with surviving future
 bookings when cancellations are enabled.
 
@@ -147,8 +150,9 @@ or force them on the first eligible day.
 	`gross_booking_revenue`, `refund_total` and `reward_refund_total`. Events link to
 	confirmed artifact rows through episode-local `booking_id` and distinguish warmup
 	refunds from reward debits. Reward CSVs and `step_reward` report net revenue.
-- Historical confirmations, request-cohort snapshots and booked-price/revenue charts
-	remain gross booking records. Refunds are not negative nightly prices. Actual hotel
+- Historical confirmations, request-cohort snapshots and booking-day revenue charts
+	remain gross booking records. Stay-day booked mean prices exclude cancelled bookings;
+	refunds are not negative nightly prices. Actual hotel
 	occupancy reflects cancellations; historical demand and BAR levels are not reversed.
 - A separate cancellation RNG preserves the existing BAR, alternative and acceptance
 	streams. Identical policy/configuration/seed replays the same cancellations, including

@@ -32,6 +32,7 @@ class EpisodeMetrics:
         )
 
     def record_day(self, metrics: dict[str, Any]) -> None:
+        warmup = metrics.get("warmup_stay_metrics", {})
         self.cancellations.record_day(
             day_index=int(metrics["day_index"]),
             simulation_days=int(metrics["simulation_days"]),
@@ -47,6 +48,7 @@ class EpisodeMetrics:
             simulation_days=int(metrics["simulation_days"]),
             num_requests=int(metrics["num_requests"]),
             request_stays=metrics["request_stays"],
+            warmup_stays=warmup.get("requests"),
         )
         self.reward.record_day(
             day_index=int(metrics["day_index"]),
@@ -59,6 +61,9 @@ class EpisodeMetrics:
             simulation_days=int(metrics["simulation_days"]),
             confirmed_requests=metrics["confirmed_requests"],
             confirmed_nightly_prices=metrics["confirmed_nightly_prices"],
+            warmup_revenue=warmup.get("revenue"),
+            warmup_nights=warmup.get("nights"),
+            cancellations=metrics.get("cancellations", ()),
         )
         self.acceptance.record_day(
             day_index=int(metrics["day_index"]),
@@ -74,6 +79,7 @@ class EpisodeMetrics:
             num_requests=int(metrics["num_requests"]),
             occupancy_pct=float(metrics["occupancy_pct"]),
             offer_stats=metrics["offer_stats"],
+            warmup_by_checkin=warmup.get("offers_by_checkin"),
         )
 
     def end_episode(self) -> None:
