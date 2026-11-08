@@ -610,6 +610,12 @@ class PricingEnv(gym.Env):
                 "requests": request_rows,
                 "policy_coefficients": np.asarray(action, dtype=float).tolist(),
             }
+            if current_day_index == 0:
+                payload["warmup_revenue_by_stay_day"] = (
+                    self._warmup_stay_metrics["revenue"].tolist()
+                    if self._warmup_env is not None
+                    else [0.0] * self.total_days
+                )
 
             for stay_day, point in bar_history.items():
                 stay_index = (date.fromisoformat(stay_day) - self.start_simulation).days

@@ -208,6 +208,39 @@ and whether refunds occur before episode end.
 	voided-state data are not interpreted as zeros; cancellation plots are skipped if
 	the necessary data is missing from any contributing snapshot.
 
+### Episode Revenue and Reward Artifacts
+
+Each evaluation checkpoint produces two full-episode charts, independent of
+`price_plot_request_dates`. Neither chart pools different training checkpoints.
+
+- `booked_revenue_plots/<timesteps>_timesteps/env_<id>/episode_<id>.png`
+	shows retrospective **net booked revenue by stay day** (1 = simulation start).
+	Actual nightly prices of confirmed bookings are summed across room categories:
+	green is bookings made during simulation, red is bookings made during warmup,
+	and the outline is their total. Cancellations observed by episode completion
+	remove the affected stay nights from the original booking-origin component.
+	Only nights within the inclusive simulation calendar are shown; no snapshot-day
+	filter or post-episode settlement is applied.
+- `reward_plots/<timesteps>_timesteps/env_<id>/episode_<id>.png`
+	shows **daily reward by simulation day**, using raw, unnormalized values.
+	Green extends above zero for that day's gross booking revenue; red extends
+	below zero for cancellation debits; the blue line is net reward. Net reward can
+	be negative. Here colors identify positive/negative contributions, not booking
+	origins. Warmup-origin refunds are excluded, matching the environment's reward.
+	Full booking values are recognized on confirmation day, even for stays beyond
+	the episode end, so this series is not the stay-day revenue total.
+- Child runs also write `mean_over_episodes.png` in each chart's timestep folder.
+	Parent runs write `mean_over_seeds.png`: evaluation episodes are averaged within
+	each training seed, then the seed means are averaged with equal weights at the
+	same checkpoint. All reward components use identical contributors and weights.
+	Individual plots retain cancellation spikes that averages may hide.
+- Evaluation JSON stores the initial warmup nightly revenue on the first step;
+	the existing booking, cancellation and reward fields supply the remaining data.
+	Legacy artifacts without warmup totals cannot produce the revenue split;
+	artifacts without reward component data cannot produce the decomposed reward
+	chart. Missing data is never substituted with zeros. Summary titles report the
+	actual contributor count, and incompatible calendars cannot be averaged.
+
 ### Formatting, Linting and Testing
 
 You can configure Ruff by editing the `.ruff.toml` file. It is currently set to the default configuration.

@@ -12,6 +12,149 @@ from pricing_advertising.plots.eval_artifact_plots import (
 )
 
 
+def financial_artifact():
+    start = date(2025, 1, 1)
+    steps = [
+        {
+            "start_simulation": str(start),
+            "end_simulation": "2025-01-03",
+            "request_day": str(start + timedelta(days=index)),
+            "day_index": index,
+            "requests": [],
+            "cancellations": [],
+            "gross_booking_revenue": 0.0,
+            "reward_refund_total": 0.0,
+            "step_reward": 0.0,
+        }
+        for index in range(3)
+    ]
+    steps[0]["warmup_revenue_by_stay_day"] = [50.0, 60.0, 70.0]
+    return {
+        "steps": steps,
+        "checkpoint_timesteps": 10,
+        "env_index": 0,
+        "episode_id": 0,
+        "snapshot_dates": [],
+    }
+
+
+def test_episode_financial_metrics_separate_stay_revenue_and_daily_reward():
+    artifact = financial_artifact()
+    steps = artifact["steps"]
+    booking = {
+        "confirmed": True,
+        "check_in": "2025-01-03",
+        "days_stay": 2,
+        "daily_prices": [100, 150],
+    }
+    steps[0]["requests"] = [booking, deepcopy(booking), {"confirmed": False}]
+    steps[0].update(gross_booking_revenue=500, step_reward=500)
+    steps[1]["cancellations"] = [
+        {"check_in": "2025-01-03", "daily_prices": [100, 150], "from_warmup": False},
+        {"check_in": "2025-01-03", "daily_prices": [70], "from_warmup": True},
+    ]
+    steps[1].update(reward_refund_total=250, step_reward=-250)
+    original = deepcopy(artifact)
+    metrics = plots.build_episode_financial_metrics(artifact)
+    assert metrics["booked_revenue"]["simulation"] == [0, 0, 100]
+    assert metrics["booked_revenue"]["warmup"] == [50, 60, 0]
+    assert metrics["reward"]["net"] == [500, -250, 0]
+    assert metrics["reward"]["refunds"] == [0, 250, 0]
+    assert artifact == original
+
+
+def test_episode_financial_metrics_legacy_reward_independent_of_warmup():
+    artifact = financial_artifact()
+    del artifact["steps"][0]["warmup_revenue_by_stay_day"]
+    assert set(plots.build_episode_financial_metrics(artifact)) == {"reward"}
+    for step in artifact["steps"]:
+        del step["gross_booking_revenue"]
+        del step["reward_refund_total"]
+    assert plots.build_episode_financial_metrics(artifact) == {}
+
+
+@pytest.mark.parametrize("invalid", ["calendar", "incomplete", "identity", "nan", "overrefund"])
+def test_episode_financial_metrics_reject_invalid_data(invalid):
+    artifact = financial_artifact()
+    if invalid == "calendar":
+        artifact["steps"][1]["day_index"] = 0
+    elif invalid == "incomplete":
+        artifact["steps"].pop()
+    elif invalid == "identity":
+        artifact["steps"][0]["step_reward"] = 1
+    elif invalid == "nan":
+        artifact["steps"][0]["warmup_revenue_by_stay_day"][0] = float("nan")
+    else:
+        artifact["steps"][0]["cancellations"] = [
+            {"check_in": "2025-01-02", "daily_prices": [99], "from_warmup": True}
+        ]
+    with pytest.raises(ValueError):
+        plots.build_episode_financial_metrics(artifact)
+
+
+@pytest.mark.parametrize("num_days", [1, 4])
+@pytest.mark.parametrize("bookings,refunds", [(0, 0), (100, 0), (0, 250), (100, 250), (1000, 900)])
+def test_financial_figures_show_signed_components(num_days, bookings, refunds):
+    metrics = {
+        "start": "2025-01-01",
+        "end": str(date(2025, 1, num_days)),
+        "day": list(range(1, num_days + 1)),
+        "bookings": [bookings] * num_days,
+        "refunds": [refunds] * num_days,
+        "net": [bookings - refunds] * num_days,
+    }
+    panel = plots.financial_figure("reward", metrics, title="Daily reward").axes[0]
+    assert panel.collections[0].get_paths()[0].vertices[:, 1].max() == bookings
+    assert panel.collections[1].get_paths()[0].vertices[:, 1].min() == -refunds
+    np.testing.assert_array_equal(panel.lines[0].get_ydata(), metrics["net"])
+    assert panel.get_ylim()[0] < -refunds
+    assert panel.get_ylim()[1] > bookings
+    assert panel.get_xlim() == (0.5, num_days + 0.5)
+    revenue = {**metrics, "simulation": [10] * num_days, "warmup": [20] * num_days}
+    panel = plots.financial_figure("booked_revenue", revenue, title="Revenue").axes[0]
+    np.testing.assert_array_equal(panel.lines[0].get_ydata(), [30] * num_days)
+    assert panel.collections[0].get_paths()[0].vertices[:, 1].max() == 10
+    assert panel.collections[1].get_paths()[0].vertices[:, 1].max() == 30
+
+
+def test_financial_plots_have_no_snapshot_directory(monkeypatch):
+    paths = []
+    monkeypatch.setattr(plots.mlflow, "log_figure", lambda figure, path: paths.append(path))
+    metrics = plots.log_episode_financial_plots(financial_artifact())
+    plots.log_mean_financial_plots([metrics, metrics], 10, unit="episodes")
+    assert set(paths) == {
+        f"{kind}_plots/00000010_timesteps/{suffix}.png"
+        for kind in ("reward", "booked_revenue")
+        for suffix in ("env_00/episode_00000", "mean_over_episodes")
+    }
+    other = deepcopy(metrics)
+    other["reward"]["start"] = "2024-01-01"
+    with pytest.raises(ValueError, match="different calendars"):
+        plots.mean_financial_metrics([metrics, other])
+
+
+def test_financial_revenue_clips_cancellations_at_calendar_boundaries():
+    artifact = financial_artifact()
+    artifact["steps"][0]["cancellations"] = [
+        {"check_in": "2024-12-31", "daily_prices": [999, 50], "from_warmup": True},
+        {"check_in": "2025-01-03", "daily_prices": [70, 999], "from_warmup": True},
+    ]
+    metrics = plots.build_episode_financial_metrics(artifact)
+    assert metrics["booked_revenue"]["warmup"] == [0, 60, 0]
+    assert metrics["reward"]["net"] == [0, 0, 0]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("step_reward", float("nan")), ("gross_booking_revenue", -1), ("reward_refund_total", -1)],
+)
+def test_financial_reward_rejects_nonfinite_or_negative_components(field, value):
+    artifact = financial_artifact()
+    artifact["steps"][0][field] = value
+    with pytest.raises(ValueError, match="Invalid daily reward"):
+        plots.build_episode_financial_metrics(artifact)
+
+
 @pytest.mark.parametrize("num_days", [1, 4])
 def test_cancellation_stackplot_matches_total_without_double_counting(num_days):
     days = np.arange(59, 59 + num_days)

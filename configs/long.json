@@ -1,7 +1,7 @@
 {
   "run": {
     "run_name": "PPO_1M_with_alternatives",
-    "seeds": [400287, 26508205, 45598533, 48953810, 39797986, 50884562, 54311534, 21503116, 33284243, 23261443],
+    "seeds": [400287, 26508205, 45598533, 48953810, 39797986, 50884562, 54311534, 21503116],
     "bar_table_path": "../data/bar_table.csv",
     "tracking_uri": "sqlite:///mlflow.db",
     "use_subprocesses": true

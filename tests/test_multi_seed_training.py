@@ -9,6 +9,35 @@ from pricing_advertising.training import multi_seed_training as module
 SEEDS = [11, 22, 33]
 
 
+def test_parent_financial_plots_average_episodes_then_seeds_per_checkpoint(monkeypatch):
+    from pricing_advertising.plots import aggregate_plots
+
+    def episode(value):
+        calendar = {"start": "2025-01-01", "end": "2025-01-01", "day": [1]}
+        return {
+            "reward": {**calendar, "bookings": [value], "refunds": [10], "net": [value - 10]},
+            "booked_revenue": {**calendar, "simulation": [value], "warmup": [5]},
+        }
+
+    evaluations = [
+        {"financial_metrics": {"10": [episode(2), episode(4)], "20": [episode(100)]}},
+        {"financial_metrics": {"10": [episode(9)], "20": [episode(200)]}},
+        {},
+    ]
+    figures = {}
+    monkeypatch.setattr(mlflow, "log_figure", lambda figure, path: figures.update({path: figure}))
+    aggregate_plots.log_mean_financial_figures(evaluations)
+    assert len(figures) == 4
+    for checkpoint, expected in [(10, 6), (20, 150)]:
+        reward = figures[f"reward_plots/{checkpoint:08d}_timesteps/mean_over_seeds.png"].axes[0]
+        revenue = figures[
+            f"booked_revenue_plots/{checkpoint:08d}_timesteps/mean_over_seeds.png"
+        ].axes[0]
+        np.testing.assert_allclose(reward.lines[0].get_ydata(), [expected - 10])
+        np.testing.assert_allclose(revenue.lines[0].get_ydata(), [expected + 5])
+        assert "Mean over 2 seeds" in reward.get_title()
+
+
 def test_main_derives_evaluation_counts_from_seeds(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
 ) -> None:
@@ -102,6 +131,27 @@ def fake_runs(monkeypatch):
                     "baseline_returns": {"constant_bar": [1.0]},
                     "policy_curves": {"10": np.full((3, 2, 101), 0.5).tolist()},
                     "snapshot_metrics": {"10": {"2025-01-09": [snapshot_metrics(seed)]}},
+                    "financial_metrics": {
+                        "10": [
+                            {
+                                "reward": {
+                                    "start": "2025-01-01",
+                                    "end": "2025-01-01",
+                                    "day": [1],
+                                    "bookings": [float(seed)],
+                                    "refunds": [0],
+                                    "net": [float(seed)],
+                                },
+                                "booked_revenue": {
+                                    "start": "2025-01-01",
+                                    "end": "2025-01-01",
+                                    "day": [1],
+                                    "simulation": [float(seed)],
+                                    "warmup": [0],
+                                },
+                            }
+                        ]
+                    },
                 },
             )
         return float(seed)
@@ -189,6 +239,10 @@ def test_parent_run_averages_child_metrics_and_logs_figures(fake_runs):
     folder = "occupancy_plots/2025-01-09/00000010_timesteps"
     (figure,) = client.list_artifacts(parent.info.run_id, folder)
     assert figure.path == f"{folder}/mean_over_seeds.png"
+    for kind in ("reward", "booked_revenue"):
+        folder = f"{kind}_plots/00000010_timesteps"
+        (figure,) = client.list_artifacts(parent.info.run_id, folder)
+        assert figure.path == f"{folder}/mean_over_seeds.png"
 
 
 @pytest.mark.parametrize("seeds", [[], [1, 1]])

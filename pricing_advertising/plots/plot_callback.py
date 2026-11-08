@@ -16,7 +16,9 @@ from pricing_advertising.plots.alternatives_tracker import AlternativesTracker
 from pricing_advertising.plots.cancellation_tracker import CancellationTracker
 from pricing_advertising.plots.episode_metrics import EpisodeMetrics
 from pricing_advertising.plots.eval_artifact_plots import (
+    log_episode_financial_plots,
     log_eval_artifact_plots,
+    log_mean_financial_plots,
     snapshot_metrics_by_date,
 )
 from pricing_advertising.plots.learning_plots import (
@@ -326,6 +328,7 @@ class EvalOccupancyCallback(EvalCallback):
         self._round_value_stats: list[dict[str, float]] = []
         # Snapshot metrics by checkpoint and snapshot date, one entry per evaluation episode
         self._snapshot_metrics: dict[int, dict[str, list[dict[str, list]]]] = {}
+        self._financial_metrics: dict[int, list[dict[str, Any]]] = {}
 
     def _get_num_rooms_by_cat(self, env: Any, idx: int) -> list[int]:  # noqa: ANN401
         if idx in self._num_rooms_cache:
@@ -448,6 +451,7 @@ class EvalOccupancyCallback(EvalCallback):
         self._round_value_stats = []
         if not self.log_to_mlflow:
             return
+        log_mean_financial_plots(self._financial_metrics.get(step, []), step, unit="episodes")
         for name, returns in self.baseline_returns.items():
             mlflow.log_metric(
                 f"baseline_return/{name}/by_training_timesteps/val",
@@ -492,6 +496,9 @@ class EvalOccupancyCallback(EvalCallback):
                 },
                 "snapshot_metrics": {
                     str(step): value for step, value in self._snapshot_metrics.items()
+                },
+                "financial_metrics": {
+                    str(step): value for step, value in self._financial_metrics.items()
                 },
             },
         )
@@ -568,6 +575,8 @@ class EvalOccupancyCallback(EvalCallback):
 
         # Generate and log evaluation artifact plots based on the current artifact.
         log_eval_artifact_plots(artifact)
+        financial_metrics = log_episode_financial_plots(artifact)
+        self._financial_metrics.setdefault(checkpoint, []).append(financial_metrics)
         for cutoff, metrics in snapshot_metrics_by_date(artifact).items():
             self._snapshot_metrics.setdefault(checkpoint, {}).setdefault(cutoff, []).append(metrics)
 

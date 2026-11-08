@@ -11,7 +11,12 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from pricing_advertising.plots.alternatives_plots import log_alternative_figures
-from pricing_advertising.plots.eval_artifact_plots import RATE_COUNT_KEYS, cancellation_figure
+from pricing_advertising.plots.eval_artifact_plots import (
+    RATE_COUNT_KEYS,
+    cancellation_figure,
+    log_mean_financial_plots,
+    mean_financial_metrics,
+)
 from pricing_advertising.plots.learning_plots import (
     ActionStatistics,
     action_clipping_figure,
@@ -29,6 +34,22 @@ def _nanmean(values: Sequence[Any], axis: int = 0) -> np.ndarray:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         return np.nanmean(np.asarray(values, dtype=float), axis=axis)
+
+
+def log_mean_financial_figures(evaluations: Sequence[dict[str, Any]]) -> None:
+    checkpoints = sorted(
+        {
+            int(step)
+            for evaluation in evaluations
+            for step in evaluation.get("financial_metrics", {})
+        }
+    )
+    for checkpoint in checkpoints:
+        seeds = [
+            mean_financial_metrics(evaluation.get("financial_metrics", {}).get(str(checkpoint), []))
+            for evaluation in evaluations
+        ]
+        log_mean_financial_plots(seeds, checkpoint, unit="seeds")
 
 
 def _nanstd(values: Sequence[Any], axis: int = 0) -> np.ndarray:

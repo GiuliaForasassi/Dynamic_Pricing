@@ -11,6 +11,7 @@ from mlflow.tracking import MlflowClient
 
 from pricing_advertising.plots.aggregate_plots import (
     log_mean_alternative_figures,
+    log_mean_financial_figures,
     log_mean_learning_figures,
     log_mean_snapshot_figures,
 )
@@ -119,5 +120,6 @@ def run_multi_seed_simulation(
         for split in ("train", "val"):
             log_mean_alternative_figures(split, _load_all(child_run_ids, f"alternatives_{split}"))
         log_mean_snapshot_figures(evaluations)
+        log_mean_financial_figures(evaluations)
 
         return float(np.mean(rewards))

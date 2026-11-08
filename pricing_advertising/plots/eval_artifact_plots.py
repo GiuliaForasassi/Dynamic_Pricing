@@ -13,8 +13,235 @@ from pricing_advertising.pricing_model.bar_table import max_price
 from pricing_advertising.pricing_model.bernstein_model import BernsteinProbModel
 from pricing_advertising.utils.constants import HIGH_SEASON
 
-
 # ----------- HELPER FUNCTION -----------
+FINANCIAL_SERIES = {
+    "reward": ("bookings", "refunds", "net"),
+    "booked_revenue": ("simulation", "warmup"),
+}
+
+
+def mean_financial_metrics(episodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    result = {}
+    for kind, keys in FINANCIAL_SERIES.items():
+        values = [episode[kind] for episode in episodes if kind in episode]
+        if not values:
+            continue
+        calendar = {key: values[0][key] for key in ("start", "end", "day")}
+        if any(
+            any(value[key] != expected for key, expected in calendar.items()) for value in values
+        ):
+            raise ValueError("Cannot average financial metrics with different calendars.")
+        for value in values:
+            _financial_arrays(kind, value)
+        result[kind] = {
+            **calendar,
+            **{key: np.mean([value[key] for value in values], axis=0).tolist() for key in keys},
+        }
+    return result
+
+
+def _financial_arrays(kind: str, metrics: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    days = np.asarray(metrics["day"], dtype=float)
+    size = (date.fromisoformat(metrics["end"]) - date.fromisoformat(metrics["start"])).days + 1
+    arrays = np.asarray([metrics[key] for key in FINANCIAL_SERIES[kind]], dtype=float)
+    if (
+        size <= 0
+        or not np.array_equal(days, np.arange(1, size + 1))
+        or arrays.shape != (len(FINANCIAL_SERIES[kind]), size)
+        or not np.isfinite(arrays).all()
+        or np.any(arrays[:2] < 0)
+    ):
+        raise ValueError("Invalid financial series or calendar.")
+    if kind == "reward" and not np.allclose(
+        arrays[2], arrays[0] - arrays[1], rtol=1e-10, atol=1e-8
+    ):
+        raise ValueError("Invalid daily reward components.")
+    return days, arrays
+
+
+def financial_figure(kind: str, metrics: dict[str, Any], *, title: str) -> Figure:
+    days, arrays = _financial_arrays(kind, metrics)
+    edges = np.concatenate((days[:1] - 0.5, days + 0.5))
+    figure = Figure(figsize=(12, 4), layout="constrained")
+    panel = figure.subplots()
+    if kind == "reward":
+        bookings, refunds, net = arrays
+        panel.fill_between(
+            edges,
+            0,
+            np.append(bookings, bookings[-1]),
+            step="post",
+            color="#459a91",
+            alpha=0.8,
+            label="Booking revenue",
+        )
+        panel.fill_between(
+            edges,
+            0,
+            -np.append(refunds, refunds[-1]),
+            step="post",
+            color="#e47761",
+            alpha=0.8,
+            label="Cancellation debits",
+        )
+        panel.plot(
+            days,
+            net,
+            color="#2471b8",
+            drawstyle="steps-mid",
+            marker="." if len(days) == 1 else None,
+            label="Net reward",
+        )
+        panel.axhline(0, color="#555555", linewidth=0.8)
+        low = min(0.0, float((-refunds).min()), float(net.min()))
+        high = max(0.0, float(bookings.max()), float(net.max()))
+        padding = max(1.0, (high - low) * 0.08)
+        panel.set(
+            ylim=(low - padding, high + padding),
+            ylabel="Daily reward (EUR)",
+            xlabel="Simulation day (1 = simulation start)",
+        )
+    else:
+        simulation, warmup = arrays
+        total = simulation + warmup
+        panel.stackplot(
+            edges,
+            np.append(simulation, simulation[-1]),
+            np.append(warmup, warmup[-1]),
+            step="post",
+            colors=("#459a91", "#e47761"),
+            alpha=0.8,
+            labels=("Simulation bookings", "Warmup bookings"),
+        )
+        panel.plot(days, total, color="#333333", drawstyle="steps-mid", label="Total revenue")
+        panel.set(
+            ylim=(0, max(1.0, float(total.max()) * 1.15)),
+            ylabel="Net booked revenue (EUR)",
+            xlabel="Stay day (1 = simulation start)",
+        )
+    panel.set(xlim=(edges[0], edges[-1]), title=title)
+    panel.xaxis.set_major_locator(MaxNLocator(integer=True))
+    panel.grid(axis="y", alpha=0.25)
+    panel.legend(loc="upper center", ncols=3, fontsize=8)
+    return figure
+
+
+def _log_financial_figure(
+    kind: str, metrics: dict[str, Any], checkpoint: int, suffix: str, scope: str
+) -> None:
+    name = "Daily reward" if kind == "reward" else "Net booked revenue by stay day"
+    title = f"{name} | Timesteps: {checkpoint}\n{metrics['start']} to {metrics['end']} | {scope}"
+    figure = financial_figure(kind, metrics, title=title)
+    try:
+        mlflow.log_figure(figure, f"{kind}_plots/{checkpoint:08d}_timesteps/{suffix}.png")
+    finally:
+        plt.close(figure)
+
+
+def log_mean_financial_plots(episodes: list[dict[str, Any]], checkpoint: int, *, unit: str) -> None:
+    for kind, metrics in mean_financial_metrics(episodes).items():
+        count = sum(kind in episode for episode in episodes)
+        _log_financial_figure(
+            kind, metrics, checkpoint, f"mean_over_{unit}", f"Mean over {count} {unit}"
+        )
+
+
+def log_episode_financial_plots(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    metrics = build_episode_financial_metrics(artifact)
+    env_idx, episode_id = int(artifact["env_index"]), int(artifact["episode_id"])
+    for kind, values in metrics.items():
+        _log_financial_figure(
+            kind,
+            values,
+            int(artifact["checkpoint_timesteps"]),
+            f"env_{env_idx:02d}/episode_{episode_id:05d}",
+            f"Env: {env_idx} | Episode: {episode_id}",
+        )
+    return metrics
+
+
+def build_episode_financial_metrics(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    steps = artifact["steps"]
+    if not steps:
+        raise ValueError("Empty evaluation episode.")
+    start = date.fromisoformat(steps[0]["start_simulation"])
+    end = date.fromisoformat(steps[0]["end_simulation"])
+    size = (end - start).days + 1
+    if size <= 0 or len(steps) != size:
+        raise ValueError("Incomplete evaluation episode.")
+    for index, step in enumerate(steps):
+        if (
+            step["request_day"] != (start + timedelta(days=index)).isoformat()
+            or step["day_index"] != index
+            or step["start_simulation"] != start.isoformat()
+            or step["end_simulation"] != end.isoformat()
+        ):
+            raise ValueError("Episode calendar is not continuous or consistent.")
+    calendar = {"start": start.isoformat(), "end": end.isoformat(), "day": list(range(1, size + 1))}
+    result = {}
+    reward_keys = ("gross_booking_revenue", "reward_refund_total", "step_reward")
+    present = [key in step for step in steps for key in reward_keys]
+    if all(present):
+        bookings, refunds, reward = (
+            np.asarray([step[key] for step in steps], dtype=float) for key in reward_keys
+        )
+        if (
+            not np.isfinite([bookings, refunds, reward]).all()
+            or np.any(bookings < 0)
+            or np.any(refunds < 0)
+            or not np.allclose(reward, bookings - refunds, rtol=1e-10, atol=1e-8)
+        ):
+            raise ValueError("Invalid daily reward components.")
+        result["reward"] = {
+            **calendar,
+            "bookings": bookings.tolist(),
+            "refunds": refunds.tolist(),
+            "net": reward.tolist(),
+        }
+    elif any(key in step for step in steps for key in reward_keys[:2]):
+        raise ValueError("Incomplete daily reward components.")
+
+    if "warmup_revenue_by_stay_day" not in steps[0]:
+        return result
+    warmup = np.asarray(steps[0]["warmup_revenue_by_stay_day"], dtype=float).copy()
+    if warmup.shape != (size,) or not np.isfinite(warmup).all() or np.any(warmup < -1e-8):
+        raise ValueError("Invalid initial warmup revenue.")
+    main = np.zeros(size, dtype=float)
+
+    def add_nights(target: np.ndarray, check_in: str, prices: Any, sign: int) -> None:
+        nightly = np.asarray(prices, dtype=float)
+        if (
+            nightly.ndim != 1
+            or not nightly.size
+            or not np.isfinite(nightly).all()
+            or np.any(nightly < 0)
+        ):
+            raise ValueError("Invalid nightly revenue prices.")
+        offset = (date.fromisoformat(check_in) - start).days
+        first = max(0, -offset)
+        stop = min(nightly.size, size - offset)
+        if first < stop:
+            target[offset + first : offset + stop] += sign * nightly[first:stop]
+
+    for step in steps:
+        for booking in step["requests"]:
+            if not booking["confirmed"]:
+                continue
+            prices = booking["daily_prices"]
+            if prices is None or len(prices) != booking["days_stay"]:
+                raise ValueError("Nightly prices not aligned with the stay.")
+            add_nights(main, booking["check_in"], prices, 1)
+        for cancellation in step["cancellations"]:
+            target = warmup if cancellation["from_warmup"] else main
+            add_nights(target, cancellation["check_in"], cancellation["daily_prices"], -1)
+    if np.any(main < -1e-8) or np.any(warmup < -1e-8):
+        raise ValueError("Cancellations exceed booked revenue.")
+    main = np.maximum(main, 0)
+    warmup = np.maximum(warmup, 0)
+    result["booked_revenue"] = {**calendar, "simulation": main.tolist(), "warmup": warmup.tolist()}
+    return result
+
+
 # Utility functions for evaluation artifact plots: division function with safe handling of zero denominators
 def _ratio(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     result = np.full(numerator.shape, np.nan, dtype=float)

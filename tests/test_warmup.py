@@ -50,6 +50,57 @@ def constant_policy(env: PricingEnv, value: float):
     return lambda _observation: np.full(env.action_space.shape, value, dtype=np.float32)
 
 
+@pytest.mark.parametrize("warmup_days", [0, WARMUP_DAYS])
+@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+def test_episode_financial_artifacts_match_stay_tracker(warmup_days, cancellation_model):
+    from pricing_advertising.plots.eval_artifact_plots import build_episode_financial_metrics
+    from pricing_advertising.plots.price_tracker import PriceTracker
+
+    env = make_env(
+        warmup_days=warmup_days,
+        cancellation_model=cancellation_model,
+        collect_eval_artifacts=True,
+        artifact_snapshot_dates=[],
+    )
+    policy = constant_policy(env, 0.5)
+    env.set_warmup_policy(policy)
+    observation, _ = env.reset()
+    tracker = PriceTracker(split="val", log_to_mlflow=False)
+    steps = []
+    rewards = []
+    for index in range(env.total_days):
+        observation, reward, _, _, info = env.step(policy(observation))
+        metrics = info["step_metrics"]
+        warmup = metrics.get("warmup_stay_metrics", {})
+        tracker.record_day(
+            day_index=index,
+            start_simulation=START,
+            simulation_days=env.total_days,
+            confirmed_requests=metrics["confirmed_requests"],
+            confirmed_nightly_prices=metrics["confirmed_nightly_prices"],
+            warmup_revenue=warmup.get("revenue"),
+            warmup_nights=warmup.get("nights"),
+            cancellations=metrics["cancellations"],
+        )
+        payload = info["eval_artifacts"]
+        assert ("warmup_revenue_by_stay_day" in payload) == (index == 0)
+        if index == 0:
+            np.testing.assert_array_equal(
+                payload["warmup_revenue_by_stay_day"],
+                warmup.get("revenue", np.zeros(env.total_days)),
+            )
+        steps.append(payload)
+        rewards.append(reward)
+    financial = build_episode_financial_metrics({"steps": steps})
+    np.testing.assert_allclose(
+        np.asarray(financial["booked_revenue"]["simulation"])
+        + financial["booked_revenue"]["warmup"],
+        tracker._revenue,
+    )
+    np.testing.assert_array_equal(financial["reward"]["net"], rewards)
+    env.close()
+
+
 @pytest.mark.parametrize("value", [True, -1, 1.5])
 def test_invalid_warmup_days_are_rejected(value):
     with pytest.raises(ValueError, match="warmup_days"):

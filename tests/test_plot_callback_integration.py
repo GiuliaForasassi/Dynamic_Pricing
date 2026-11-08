@@ -717,12 +717,25 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
         model.num_timesteps = 2
         assert callback.on_step()
         assert len(artifacts) == 2
-        assert len(figures) == 18
+        assert len(figures) == 24
         assert not any(path.startswith("request_plots/") for path in figures)
+        for folder, expected in (
+            ("reward_plots", [100, 400, 0]),
+            ("booked_revenue_plots", [0, 0, 500]),
+        ):
+            panel = figures[f"{folder}/00000002_timesteps/mean_over_episodes.png"].axes[0]
+            np.testing.assert_array_equal(panel.lines[0].get_ydata(), expected)
 
         for episode in range(2):
             suffix = f"00000002_timesteps/env_00/episode_{episode:05d}"
             artifact = artifacts[f"eval_data/{suffix}.json"]
+            for folder, expected in (
+                ("reward_plots", [100, 400, 0]),
+                ("booked_revenue_plots", [0, 0, 500]),
+            ):
+                panel = figures[f"{folder}/{suffix}.png"].axes[0]
+                np.testing.assert_array_equal(panel.lines[0].get_xdata(), [1, 2, 3])
+                np.testing.assert_array_equal(panel.lines[0].get_ydata(), expected)
             snapshot = artifact["steps"][1]
             assert snapshot["request_day"] == str(END)
             assert snapshot["occupancy_by_category"] == [[0, 2], [0, 1], [0, 0]]
@@ -803,8 +816,11 @@ def test_artifact_figures_use_only_snapshot_requests_from_evaluation(make_env, l
                 elif path.startswith(("confirmation_rate_plots/", "price_acceptance_plots/")):
                     assert not panel.lines
                     assert len(panel.collections) == 1
-                elif path.startswith("cancellation_plots/"):
+                elif path.startswith(("cancellation_plots/", "booked_revenue_plots/")):
                     assert len(panel.lines) == 1
+                    assert len(panel.collections) == 2
+                elif path.startswith("reward_plots/"):
+                    assert len(panel.lines) == 2
                     assert len(panel.collections) == 2
                 else:
                     assert panel.lines
@@ -1036,10 +1052,13 @@ def test_train_callback_logs_raw_action_statistics_and_figures(make_env, logged,
 def test_eval_callback_logs_learning_diagnostics(make_env, logged, monkeypatch, tmp_path):
     metrics, _, _ = logged
     figures = {}
+    exported = {}
+    monkeypatch.setattr(module, "log_run_data", lambda name, data: exported.update({name: data}))
     monkeypatch.setattr(module.mlflow, "log_figure", lambda fig, path: figures.update({path: fig}))
     monkeypatch.setattr(module, "log_eval_artifact_plots", lambda artifact: None)
     training_env, _ = make_env(price=100.0)
     evaluation_env, _ = make_env(price=200.0, collect_artifacts=True)
+    evaluation_env.artifact_snapshot_dates = set()
     training = VecNormalize(
         VecMonitor(DummyVecEnv([lambda: training_env])),
         norm_obs=False,
@@ -1079,6 +1098,16 @@ def test_eval_callback_logs_learning_diagnostics(make_env, logged, monkeypatch, 
 
     # Raw (unnormalized) EUR returns, one list per evaluation round
     assert callback._eval_returns == {2: [600.0, 600.0], 4: [600.0, 600.0]}
+    financial = exported["evaluation"]["financial_metrics"]
+    assert set(financial) == {"2", "4"}
+    for checkpoint in (2, 4):
+        assert len(financial[str(checkpoint)]) == 2
+        for episode in financial[str(checkpoint)]:
+            assert sum(episode["reward"]["net"]) == 600
+        for kind in ("reward", "booked_revenue"):
+            assert f"{kind}_plots/{checkpoint:08d}_timesteps/mean_over_episodes.png" in figures
+        panel = figures[f"reward_plots/{checkpoint:08d}_timesteps/mean_over_episodes.png"].axes[0]
+        assert sum(panel.lines[0].get_ydata()) == 600
     assert points(metrics, "baseline_return/constant_bar", "val") == [(2, 310.0), (4, 310.0)]
     assert [step for step, _ in points(metrics, "value_check/explained_variance", "val")] == [2, 4]
     assert {
