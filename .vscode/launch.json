@@ -6,7 +6,10 @@
             "type": "debugpy",
             "request": "launch",
             "module": "pricing_advertising",
-            "args": [],
+            "args": [
+                "--config",
+                "configs/quick.json"
+            ],
             "justMyCode": false,
             "env": {
                 "LOGURU_LEVEL": "DEBUG"

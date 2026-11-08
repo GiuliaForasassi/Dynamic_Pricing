@@ -101,6 +101,8 @@ def test_invalid_ppo_evaluation_configuration_fails_before_starting_run(
                 price_sensitivity=0.7,
                 high_season_multiplier=0.6,
                 reference_prices=(100.0, 200.0, 300.0),
+                timing_strength=0.6,
+                timing_decay_days=5.0,
             ),
         ),
         dict(
@@ -237,6 +239,10 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
         )
         assert logged_params["cancellation_reference_prices"] == str(
             cancellation_model.reference_prices
+        )
+        assert logged_params["cancellation_timing_strength"] == cancellation_model.timing_strength
+        assert (
+            logged_params["cancellation_timing_decay_days"] == cancellation_model.timing_decay_days
         )
     assert training.gamma == evaluation.gamma == 0.995
     assert training.norm_obs is evaluation.norm_obs is False

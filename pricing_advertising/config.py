@@ -88,6 +88,8 @@ class EvaluationConfig(ConfigSection):
 class CancellationConfig(ConfigSection):
     daily_probability: Annotated[float, Field(strict=True, ge=0, le=1, allow_inf_nan=False)] = 0.005
     price_sensitivity: Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)] = 1.0
+    timing_strength: Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)] = 0.3
+    timing_decay_days: Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)] = 3.0
     high_season_multiplier: Annotated[
         float, Field(strict=True, gt=0, le=1, allow_inf_nan=False)
     ] = 0.8

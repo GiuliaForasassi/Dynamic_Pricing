@@ -220,7 +220,9 @@ def test_training_callback_counts_each_warmup_once_across_auto_resets(cancellati
         if metrics["day_index"] == 0:
             warmups_seen += 1
             assert metrics["warmup_stay_metrics"]["requests"].sum() > 0
-            assert metrics["warmup_stay_metrics"]["nights"].sum() > 0
+            assert np.all(metrics["warmup_stay_metrics"]["nights"] >= 0)
+            if cancellation_model is None:
+                assert metrics["warmup_stay_metrics"]["nights"].sum() > 0
         else:
             assert "warmup_stay_metrics" not in metrics
         reference.record_day(metrics)

@@ -78,6 +78,13 @@ def test_probability_endpoints(probability):
         {"reference_prices": (100.0,)},
         {"reference_prices": (100.0, 0.0, 300.0)},
         {"reference_prices": (100.0, float("inf"), 300.0)},
+        {"timing_strength": -0.1},
+        {"timing_strength": float("nan")},
+        {"timing_strength": float("inf")},
+        {"timing_decay_days": 0},
+        {"timing_decay_days": -1},
+        {"timing_decay_days": float("nan")},
+        {"timing_decay_days": float("inf")},
     ],
 )
 def test_invalid_model_configuration(kwargs):
@@ -99,6 +106,78 @@ def test_configuration_is_pickleable_and_copies_references():
     assert pickle.loads(pickle.dumps(model)) == model
 
 
+@pytest.mark.parametrize("eligible_days", [1, 2, 3, 30, 359])
+@pytest.mark.parametrize("probability", [1e-12, 0.005, 0.5, 1 - 1e-12])
+@pytest.mark.parametrize("strength", [0.0, 0.3, 1e308])
+def test_timing_preserves_total_probability(eligible_days, probability, strength):
+    model = CancellationModel(timing_strength=strength)
+    weights = model._timing_weights(eligible_days)
+    log_survival = np.log1p(-probability)
+    hazards = -np.expm1(log_survival * weights)
+    assert weights.sum() == pytest.approx(eligible_days)
+    assert np.all(np.isfinite(hazards))
+    assert np.all((hazards >= 0) & (hazards <= 1))
+    assert np.prod(1 - hazards) == pytest.approx((1 - probability) ** eligible_days)
+    np.testing.assert_allclose(weights, weights[::-1])
+    if strength > 0 and eligible_days >= 3:
+        assert weights[0] > weights[eligible_days // 2]
+    else:
+        np.testing.assert_allclose(weights, 1)
+
+
+@pytest.mark.parametrize("decay", [1e-308, 3.0, 1e308])
+def test_timing_weights_remain_finite(decay):
+    weights = CancellationModel(timing_decay_days=decay)._timing_weights(359)
+    assert np.all(np.isfinite(weights))
+    assert weights.sum() == pytest.approx(359)
+
+
+def test_timing_sampler_matches_each_day_and_no_cancellation():
+    model = CancellationModel()
+    probability = 0.005
+    eligible_days = 29
+    offsets = np.arange(eligible_days)
+    weights = 1 + 0.3 * (np.exp(-offsets / 3) + np.exp(-(28 - offsets) / 3))
+    weights *= eligible_days / weights.sum()
+    cumulative = -np.expm1(np.log1p(-probability) * np.cumsum(weights))
+    rng = Mock()
+    lower = 0.0
+    for day, upper in enumerate(cumulative, start=1):
+        rng.random.return_value = (lower + upper) / 2
+        assert model.sample_waiting_days(probability, 30, rng) == day
+        lower = upper
+    rng.random.return_value = (1 + cumulative[-1]) / 2
+    assert model.sample_waiting_days(probability, 30, rng) is None
+    rng.geometric.assert_not_called()
+
+
+@pytest.mark.parametrize("waiting_days,expected", [(1, 1), (29, 29), (30, None)])
+def test_zero_timing_strength_keeps_geometric_sampler(waiting_days, expected):
+    rng = Mock()
+    rng.geometric.return_value = waiting_days
+    assert CancellationModel(timing_strength=0).sample_waiting_days(0.005, 30, rng) == expected
+    rng.geometric.assert_called_once_with(0.005)
+    rng.random.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "probability,advance,expected", [(0, 30, None), (1, 30, 1), (1, 1, None), (0.5, 0, None)]
+)
+def test_timing_sampler_endpoints(probability, advance, expected):
+    rng = Mock()
+    assert CancellationModel().sample_waiting_days(probability, advance, rng) == expected
+    rng.random.assert_not_called()
+    rng.geometric.assert_not_called()
+
+
+@pytest.mark.parametrize("advance", [2, 3])
+def test_short_timing_windows_keep_constant_hazard(advance):
+    rng = Mock()
+    rng.random.return_value = 0.075
+    expected = None if advance == 2 else 2
+    assert CancellationModel().sample_waiting_days(0.05, advance, rng) == expected
+
+
 START = date(2025, 3, 1)
 
 
@@ -118,7 +197,7 @@ def make_cancellation_env(monkeypatch):
             "allow_category_alternative": False,
             "allow_period_alternative": False,
             "collect_eval_artifacts": True,
-            "cancellation_model": CancellationModel(daily_probability=1.0),
+            "cancellation_model": CancellationModel(daily_probability=1.0, timing_strength=0),
         }
         config.update(kwargs)
         env = PricingEnv(**config)
@@ -282,6 +361,52 @@ def test_warmup_pending_cancellations_appear_in_snapshots(make_cancellation_env)
     _, reward, _, _, info = step_day(env)
     assert reward == 0
     assert info["step_metrics"]["num_cancelled"] == 1
+
+
+@pytest.mark.parametrize("warmup_days", [0, 1])
+@pytest.mark.parametrize("waiting_days", [1, 3, None])
+def test_biased_schedule_keeps_inventory_until_due(
+    make_cancellation_env, warmup_days, waiting_days
+):
+    booked_on = START - timedelta(days=warmup_days)
+    check_in = booked_on + timedelta(days=4)
+    env = make_cancellation_env(
+        {booked_on: [Request(booked_on, check_in, 2, 1)]},
+        warmup_days=warmup_days,
+        cancellation_model=CancellationModel(
+            daily_probability=0.2, price_sensitivity=0, high_season_multiplier=1
+        ),
+    )
+    weights = 1 + 0.3 * (np.exp(-np.arange(3) / 3) + np.exp(-np.arange(2, -1, -1) / 3))
+    cumulative = np.concatenate(
+        ([0.0], -np.expm1(np.log(0.8) * np.cumsum(weights * 3 / weights.sum())), [1.0])
+    )
+    interval = waiting_days if waiting_days is not None else 4
+    env.cancellation_rng = Mock()
+    env.cancellation_rng.random.return_value = (cumulative[interval - 1] + cumulative[interval]) / 2
+    env.reset()
+    if not warmup_days:
+        observation, _, _, _, _ = step_day(env)
+        assert set(observation) == set(env.observation_space.spaces)
+    booking = next(iter(env._bookings.values()))
+    expected_day = booked_on + timedelta(days=waiting_days) if waiting_days else None
+    assert booking.cancellation_day == expected_day
+    assert booking.cancellation_probability == pytest.approx(0.2)
+    assert env.occupancy.sum() == 2
+    events = []
+    while env.today <= env.end_simulation:
+        today = env.today
+        _, reward, _, _, info = step_day(env)
+        due = today == expected_day
+        assert info["step_metrics"]["num_cancelled"] == int(due)
+        assert reward == (-booking.total_price if due and not warmup_days else 0)
+        events.extend(info["step_metrics"]["cancellations"])
+        assert env.occupancy.sum() == (0 if expected_day and today >= expected_day else 2)
+    assert len(events) == int(waiting_days is not None)
+    if events:
+        assert events[0]["from_warmup"] == bool(warmup_days)
+    env.cancellation_rng.random.assert_called_once()
+    env.cancellation_rng.geometric.assert_not_called()
 
 
 def test_invalid_action_and_terminal_step_do_not_cancel(make_cancellation_env):

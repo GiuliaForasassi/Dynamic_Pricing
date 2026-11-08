@@ -52,7 +52,18 @@ def test_load_and_adapt_config(values, tmp_path):
     assert kwargs["start_simulation"] == date(2025, 1, 1)
     assert kwargs["price_plot_request_dates"] == [(2025, 1, 7)]
     assert kwargs["cancellation_config"]["daily_probability"] == 0.005
+    assert kwargs["cancellation_config"]["timing_strength"] == 0.3
+    assert kwargs["cancellation_config"]["timing_decay_days"] == 3.0
     assert kwargs["eval_seeds"] == [100]
+
+
+@pytest.mark.parametrize("strength", [0.0, 0.6])
+def test_custom_cancellation_timing_is_forwarded(values, strength):
+    values["cancellation"] = {"timing_strength": strength, "timing_decay_days": 5.0}
+    config = ExperimentConfig.model_validate(values)
+    cancellation = config.runner_kwargs()["cancellation_config"]
+    assert cancellation["timing_strength"] == strength
+    assert cancellation["timing_decay_days"] == 5.0
 
 
 @pytest.mark.parametrize(
@@ -66,6 +77,13 @@ def test_load_and_adapt_config(values, tmp_path):
         ("evaluation", "eval_seeds", [21]),
         ("evaluation", "price_plot_request_dates", ["2025-02-01"]),
         ("cancellation", "daily_probability", 2),
+        ("cancellation", "timing_strength", -1),
+        ("cancellation", "timing_strength", float("inf")),
+        ("cancellation", "timing_strength", float("nan")),
+        ("cancellation", "timing_decay_days", 0),
+        ("cancellation", "timing_decay_days", -1),
+        ("cancellation", "timing_decay_days", float("inf")),
+        ("cancellation", "timing_decay_days", float("nan")),
         ("run", "unexpected", 1),
     ],
 )

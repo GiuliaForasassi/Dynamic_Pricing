@@ -677,13 +677,9 @@ class PricingEnv(gym.Env):
             prices = tuple(float(price) for price in daily_prices[index])
             probability = model.probability(offer.category, offer.t_reservation, prices)
             advance = (offer.t_reservation - self.today).days
-            waiting_days = (
-                int(self.cancellation_rng.geometric(probability))
-                if probability > 0 and advance > 1
-                else 0
-            )
+            waiting_days = model.sample_waiting_days(probability, advance, self.cancellation_rng)
             cancellation_day = (
-                self.today + timedelta(days=waiting_days) if 0 < waiting_days < advance else None
+                self.today + timedelta(days=waiting_days) if waiting_days is not None else None
             )
             booking_id = self._next_booking_id
             self._next_booking_id += 1

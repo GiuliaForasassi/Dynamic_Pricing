@@ -1,6 +1,6 @@
 {
   "run": {
-    "run_name": "PPO_medium_warmup_360-32k_steps",
+    "run_name": "PPO_medium_warmup_360-32k_steps-skew_cancellation_dist",
     "seeds": [400287],
     "bar_table_path": "../data/bar_table.csv",
     "tracking_uri": "sqlite:///mlflow.db",

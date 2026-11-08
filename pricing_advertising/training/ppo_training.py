@@ -177,6 +177,8 @@ def run_simulation(
                     "cancellation_price_sensitivity": cancellation_model.price_sensitivity,
                     "cancellation_high_season_multiplier": cancellation_model.high_season_multiplier,
                     "cancellation_reference_prices": str(cancellation_model.reference_prices),
+                    "cancellation_timing_strength": cancellation_model.timing_strength,
+                    "cancellation_timing_decay_days": cancellation_model.timing_decay_days,
                 }
             )
 
