@@ -37,5 +37,5 @@
     "price_plot_request_dates": ["2025-01-07", "2025-01-21"],
     "evaluate_baselines": true
   },
-  "cancellation": {"daily_probability": 0.005, "price_sensitivity": 1.0, "high_season_multiplier": 0.8}
+  "cancellation": {"base_daily_cancellation_prob": 0.005, "high_season_multiplier": 0.8}
 }

@@ -167,16 +167,14 @@ def run_simulation(
                 "allow_period_alternative": allow_period_alternative,
                 "warmup_days": warmup_days,
                 "cancellation_enabled": cancellation_model is not None
-                and cancellation_model.daily_probability > 0,
+                and cancellation_model.base_daily_cancellation_prob > 0,
             }
         )
         if cancellation_model is not None:
             mlflow.log_params(
                 {
-                    "cancellation_daily_probability": cancellation_model.daily_probability,
-                    "cancellation_price_sensitivity": cancellation_model.price_sensitivity,
+                    "cancellation_daily_probability": cancellation_model.base_daily_cancellation_prob,
                     "cancellation_high_season_multiplier": cancellation_model.high_season_multiplier,
-                    "cancellation_reference_prices": str(cancellation_model.reference_prices),
                     "cancellation_timing_strength": cancellation_model.timing_strength,
                     "cancellation_timing_decay_days": cancellation_model.timing_decay_days,
                 }

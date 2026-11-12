@@ -228,7 +228,8 @@ def test_training_run_saves_vecnormalize_and_evaluates_in_euros(
     assert logged_params["cancellation_enabled"] is (cancellation_model is not None)
     if cancellation_model is not None:
         assert (
-            logged_params["cancellation_daily_probability"] == cancellation_model.daily_probability
+            logged_params["cancellation_daily_probability"]
+            == cancellation_model.base_daily_cancellation_prob
         )
         assert (
             logged_params["cancellation_price_sensitivity"] == cancellation_model.price_sensitivity
@@ -844,7 +845,7 @@ def test_reward_is_recognized_on_booking_day_in_metrics_and_artifacts(
     metrics, texts, artifacts = logged
     booking_day = date(2025, 2, 28)
     env, _ = make_env(collect_artifacts=True, start=booking_day, end=end)
-    env.cancellation_model = CancellationModel(daily_probability=1.0) if cancel else None
+    env.cancellation_model = CancellationModel(base_daily_cancellation_prob=1.0) if cancel else None
     env.artifact_snapshot_dates = {booking_day}
     env.request_generator.requests_by_day = {
         booking_day: [Request(booking_day, date(2025, 3, 10), 2, 1)]

@@ -132,5 +132,7 @@ build/*
 
 mlruns
 mlflow.db
+mlflow.db-shm
+mlflow.db-wal
 tmp
 models

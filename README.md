@@ -93,8 +93,7 @@ Configure the `cancellation` section in the experiment JSON:
 
 ```json
 "cancellation": {
-  "daily_probability": 0.005,
-  "price_sensitivity": 1.0,
+	"base_daily_cancellation_prob": 0.005,
 	"high_season_multiplier": 0.8,
 	"timing_strength": 0.3,
 	"timing_decay_days": 3.0
@@ -107,62 +106,74 @@ config is not `None`; an empty dictionary enables the model with its defaults.
 The same model is passed to training, evaluation, their warmup environments and
 the PPO baseline reference lines. `run_simulation` defaults to `cancellation_config=None`.
 Direct `PricingEnv` calls still accept `cancellation_model`, defaulting to `None`.
-Setting `daily_probability=0` also disables cancellations.
+Setting `base_daily_cancellation_prob=0` also disables cancellations.
 Child MLflow runs record whether cancellations are enabled and the model parameters.
 
-At confirmation, each booking gets a hidden cancellation date (or no cancellation),
-sampled using a daily risk that is slightly higher near booking and near check-in.
-The overall probability of cancellation before check-in is unchanged from the fixed
-daily-risk model. A cancellation is scheduled only if that date falls strictly after
-confirmation and strictly before check-in. Future cancellation dates are diagnostic-only, never part
+At confirmation, cancellation is sampled in two stages:
+
+First, compute the probability that the booking ever cancels before check-in, then
+make one uniform draw: `draw < cancellation_prob` selects cancellation.
+
+Then, only for a booking selected to cancel, sample its cancellation date from a
+distribution that slightly favors days near booking and near check-in.
+
+There are no repeated daily cancellation draws. This replaces the previous daily-hazard
+model; it does not preserve that model's overall cancellation probabilities or seeded
+trajectories. Eligible cancellation dates are strictly after confirmation and strictly
+before check-in. Future cancellation dates are diagnostic-only, never part
 of policy observations or pricing decisions. Cancellation releases the whole stay
 before that day's availability checks and pricing, so rooms can be resold immediately.
-No cancellation is possible on booking day, check-in day, or during a stay. Pricing sees
+The intended cancellation window excludes booking day, check-in day, and the stay. Pricing sees
 released rooms that day, and the policy sees updated occupancy in its next observation.
 
 The model uses the final confirmed category, nightly prices and stay, including
 alternative offers. Let $r$ be the average nightly price divided by the category's
-reference price, and $f$ the fraction of booked nights in `HIGH_SEASON`. With reference
-daily probability $p_0$, price sensitivity $a$ and high-season odds multiplier $m$:
+reference price, $f$ the fraction of booked nights in `HIGH_SEASON`, $A$ the advance
+in days at confirmation, and $m$ the `high_season_multiplier`. For $0<p_0<1$:
 
 $$
-q = \frac{p_0}{1-p_0}\exp(-a(r-1))m^f,
+q = \frac{p_0}{1-p_0}\exp(-(r-1))\left[1-(1-m)f\right]\log_{10}(A),
 \qquad p_{\text{cancel}} = \frac{q}{1+q}.
 $$
 
-At the defaults this gives a base daily risk of 0.5% at reference price in low season, approximately
-0.41% at 20% above reference, and 0.40% at reference price in high season. Reference
-prices default to a copy of `LOGISTIC_ACCEPTANCE_AVG_PRICES`, ordered by room category;
-override the model's `reference_prices` tuple independently if needed. No acceptance
-lead-time or seasonal price adjustment is applied to these references. Later BAR
+The configuration key `base_daily_cancellation_prob` is retained as a legacy name:
+it supplies $p_0$, a reference **per-booking** probability, not a daily hazard. At ten
+days' advance, the defaults give a 0.5% probability at reference price in low season,
+approximately 0.41% at 20% above reference, and 0.40% at reference price in high season.
+Advance affects the cancellation odds through $\log_{10}(A)$; the resulting probability
+is not compounded over the eligible days. Reference prices come directly from
+`LOGISTIC_ACCEPTANCE_AVG_PRICES`, indexed by room category. No acceptance lead-time or
+seasonal price adjustment is applied to these references. Later BAR
 changes do not change an existing booking's cancellation probability. These parameters
-are starting assumptions, not fitted cancellation statistics. A daily probability is
-not a lifetime probability: at a constant 0.5%, 30 eligible days imply about 14%
-eventual cancellations. Explicit probability endpoints 0 and 1 disable cancellations
-or force them on the first eligible day.
+are starting assumptions, not fitted cancellation statistics. Explicit probability
+endpoints $p_0=0$ and $p_0=1$ bypass the odds formula: zero disables cancellations,
+while one always selects cancellation. When eligible days exist, the cancellation
+date is still sampled rather than forced onto the first eligible day.
 
-For $n$ eligible days and day $t=1,\ldots,n$ after booking, let $s$ be
+For $n=A-1>0$ eligible days and day $t=1,\ldots,n$ after booking, let $s$ be
 `timing_strength` and $\tau$ be `timing_decay_days`:
 
 $$
 a_t = 1+s\left(e^{-(t-1)/\tau}+e^{-(n-t)/\tau}\right),
-\qquad w_t = \frac{n a_t}{\sum_{j=1}^{n}a_j},
-\qquad p_t = 1-(1-p_{\text{cancel}})^{w_t}.
+\qquad w_t = \frac{a_t}{\sum_{j=1}^{n}a_j}.
 $$
 
-The default $s=0.3$ gently increases risk at both ends, with the boost decaying over
-roughly three days. Risk is slightly reduced in the middle. Since the weights sum to
-$n$, total cancellation probability remains $1-(1-p_{\text{cancel}})^n$. One or two
-eligible days retain constant risk. `timing_strength` must be finite and non-negative;
-`timing_decay_days` must be finite and positive. Setting `timing_strength=0` restores
-the original geometric sampler and its seeded trajectories. Enabling the bias changes
-seeded trajectories, but runs remain reproducible with the same settings and seed.
+The weights sum to one and describe the cancellation date **conditional on cancellation**.
+The unconditional probability of cancellation on day $t$ is $p_{\text{cancel}}w_t$;
+the probability of no cancellation is $1-p_{\text{cancel}}$. Timing parameters change
+when a selected cancellation occurs, not whether the booking is selected to cancel.
 
-The daily risk is conditional on the booking still being active; late cancellation
-counts need not match early counts. Stored `cancellation_probability` values remain
-the base $p_{\text{cancel}}$, not the day-specific $p_t$. Preserving total probability
-per booking does not preserve episode revenue: timing affects resale opportunities
-and whether refunds occur before episode end.
+The default $s=0.3$ gently increases the conditional date weights at both ends, with
+the boost decaying over roughly three days. `timing_strength` must be finite and
+non-negative; `timing_decay_days` must be finite and positive. Setting
+`timing_strength=0` gives a uniform distribution over eligible days, not a geometric
+distribution. One or two eligible days also have uniform date weights. Runs remain
+reproducible with the same configuration and seed.
+
+Stored `cancellation_probability` values represent the whole-booking
+$p_{\text{cancel}}$, not a daily hazard or a date weight. Changing timing can still
+change episode revenue through resale opportunities and whether refunds occur before
+episode end.
 
 - Main-episode bookings earn their full revenue on confirmation day; a cancellation
 	subtracts the original full price from reward on cancellation day.

@@ -60,8 +60,11 @@ def test_probability_decreases_with_price(cancellation_model):
 
 @pytest.mark.parametrize("probability", [0.0, 1.0])
 def test_probability_endpoints(probability):
-    model = CancellationModel(daily_probability=probability)
-    assert model.probability(RoomCategory.CATEGORY1, date(2025, 7, 1), (500.0,)) == probability
+    model = CancellationModel(base_daily_cancellation_prob=probability)
+    assert (
+        model.cancellation_probability(RoomCategory.CATEGORY1, date(2025, 7, 1), (500.0,))
+        == probability
+    )
 
 
 @pytest.mark.parametrize(
@@ -144,10 +147,10 @@ def test_timing_sampler_matches_each_day_and_no_cancellation():
     lower = 0.0
     for day, upper in enumerate(cumulative, start=1):
         rng.random.return_value = (lower + upper) / 2
-        assert model.sample_waiting_days(probability, 30, rng) == day
+        assert model.sample_cancellation_waiting_days(probability, 30, rng) == day
         lower = upper
     rng.random.return_value = (1 + cumulative[-1]) / 2
-    assert model.sample_waiting_days(probability, 30, rng) is None
+    assert model.sample_cancellation_waiting_days(probability, 30, rng) is None
     rng.geometric.assert_not_called()
 
 
@@ -155,7 +158,10 @@ def test_timing_sampler_matches_each_day_and_no_cancellation():
 def test_zero_timing_strength_keeps_geometric_sampler(waiting_days, expected):
     rng = Mock()
     rng.geometric.return_value = waiting_days
-    assert CancellationModel(timing_strength=0).sample_waiting_days(0.005, 30, rng) == expected
+    assert (
+        CancellationModel(timing_strength=0).sample_cancellation_waiting_days(0.005, 30, rng)
+        == expected
+    )
     rng.geometric.assert_called_once_with(0.005)
     rng.random.assert_not_called()
 
@@ -165,7 +171,9 @@ def test_zero_timing_strength_keeps_geometric_sampler(waiting_days, expected):
 )
 def test_timing_sampler_endpoints(probability, advance, expected):
     rng = Mock()
-    assert CancellationModel().sample_waiting_days(probability, advance, rng) == expected
+    assert (
+        CancellationModel().sample_cancellation_waiting_days(probability, advance, rng) == expected
+    )
     rng.random.assert_not_called()
     rng.geometric.assert_not_called()
 
@@ -175,7 +183,7 @@ def test_short_timing_windows_keep_constant_hazard(advance):
     rng = Mock()
     rng.random.return_value = 0.075
     expected = None if advance == 2 else 2
-    assert CancellationModel().sample_waiting_days(0.05, advance, rng) == expected
+    assert CancellationModel().sample_cancellation_waiting_days(0.05, advance, rng) == expected
 
 
 START = date(2025, 3, 1)
@@ -197,7 +205,9 @@ def make_cancellation_env(monkeypatch):
             "allow_category_alternative": False,
             "allow_period_alternative": False,
             "collect_eval_artifacts": True,
-            "cancellation_model": CancellationModel(daily_probability=1.0, timing_strength=0),
+            "cancellation_model": CancellationModel(
+                base_daily_cancellation_prob=1.0, timing_strength=0
+            ),
         }
         config.update(kwargs)
         env = PricingEnv(**config)
@@ -374,7 +384,7 @@ def test_biased_schedule_keeps_inventory_until_due(
         {booked_on: [Request(booked_on, check_in, 2, 1)]},
         warmup_days=warmup_days,
         cancellation_model=CancellationModel(
-            daily_probability=0.2, price_sensitivity=0, high_season_multiplier=1
+            base_daily_cancellation_prob=0.2, price_sensitivity=0, high_season_multiplier=1
         ),
     )
     weights = 1 + 0.3 * (np.exp(-np.arange(3) / 3) + np.exp(-np.arange(2, -1, -1) / 3))
@@ -526,7 +536,9 @@ def test_seeded_resets_replay_cancellations_and_clear_state(make_cancellation_en
         for offset in range(4)
     }
     env = make_cancellation_env(
-        calendar, hotel=Hotel(50, 1, 1), cancellation_model=CancellationModel(daily_probability=0.3)
+        calendar,
+        hotel=Hotel(50, 1, 1),
+        cancellation_model=CancellationModel(base_daily_cancellation_prob=0.3),
     )
     episodes = []
     for _ in range(2):
@@ -547,7 +559,7 @@ def test_disabled_model_preserves_legacy_behavior_and_rngs(make_cancellation_env
     calendar = {START: [Request(START, START + timedelta(days=3), 2, 1)]}
     disabled = make_cancellation_env(calendar, cancellation_model=None)
     zero = make_cancellation_env(
-        calendar, cancellation_model=CancellationModel(daily_probability=0)
+        calendar, cancellation_model=CancellationModel(base_daily_cancellation_prob=0)
     )
     for env in (disabled, zero):
         for stream, seed in zip(
@@ -602,7 +614,7 @@ def test_subprocess_environment_matches_seeded_local_cancellations(make_cancella
         seed=42,
         warmup_days=2,
         bar_update_mode="never",
-        cancellation_model=CancellationModel(daily_probability=1),
+        cancellation_model=CancellationModel(base_daily_cancellation_prob=1),
     )
     local = factory()
     vector = SubprocVecEnv([factory], start_method="fork")

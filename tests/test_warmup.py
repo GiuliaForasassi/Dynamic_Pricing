@@ -51,7 +51,9 @@ def constant_policy(env: PricingEnv, value: float):
 
 
 @pytest.mark.parametrize("warmup_days", [0, WARMUP_DAYS])
-@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+@pytest.mark.parametrize(
+    "cancellation_model", [None, CancellationModel(base_daily_cancellation_prob=0.2)]
+)
 def test_episode_financial_artifacts_match_stay_tracker(warmup_days, cancellation_model):
     from pricing_advertising.plots.eval_artifact_plots import build_episode_financial_metrics
     from pricing_advertising.plots.price_tracker import PriceTracker
@@ -133,7 +135,9 @@ def test_warmup_fills_the_hotel_without_changing_the_episode():
     assert steps == env.total_days
 
 
-@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+@pytest.mark.parametrize(
+    "cancellation_model", [None, CancellationModel(base_daily_cancellation_prob=0.2)]
+)
 def test_warmup_state_matches_an_environment_started_earlier(cancellation_model):
     env = make_env(warmup_days=WARMUP_DAYS, cancellation_model=cancellation_model)
     env.set_warmup_policy(constant_policy(env, 0.5))
@@ -160,7 +164,9 @@ def test_warmup_state_matches_an_environment_started_earlier(cancellation_model)
     assert env.cancellation_rng.bit_generator.state == earlier.cancellation_rng.bit_generator.state
 
 
-@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+@pytest.mark.parametrize(
+    "cancellation_model", [None, CancellationModel(base_daily_cancellation_prob=0.2)]
+)
 def test_stay_day_metrics_include_warmup_requests_and_bookings(monkeypatch, cancellation_model):
     env = make_env(warmup_days=WARMUP_DAYS, cancellation_model=cancellation_model)
     env.set_warmup_policy(constant_policy(env, 0.5))
@@ -251,7 +257,9 @@ def test_stay_day_metrics_include_warmup_requests_and_bookings(monkeypatch, canc
     )
 
 
-@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+@pytest.mark.parametrize(
+    "cancellation_model", [None, CancellationModel(base_daily_cancellation_prob=0.2)]
+)
 def test_training_callback_counts_each_warmup_once_across_auto_resets(cancellation_model):
     def factory():
         env = make_env(warmup_days=WARMUP_DAYS, cancellation_model=cancellation_model)
@@ -325,7 +333,9 @@ def test_forced_bar_update_baselines_need_no_warmup_policy(mode):
     assert env.occupancy[:, 0].sum() > 0
 
 
-@pytest.mark.parametrize("cancellation_model", [None, CancellationModel(daily_probability=0.2)])
+@pytest.mark.parametrize(
+    "cancellation_model", [None, CancellationModel(base_daily_cancellation_prob=0.2)]
+)
 def test_reseeded_reset_replays_the_same_warmup(cancellation_model):
     env = make_env(
         warmup_days=WARMUP_DAYS, reseed_on_reset=True, cancellation_model=cancellation_model

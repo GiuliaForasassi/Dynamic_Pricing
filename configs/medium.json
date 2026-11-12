@@ -1,6 +1,6 @@
 {
   "run": {
-    "run_name": "PPO_medium_warmup_360-32k_steps-skew_cancellation_dist",
+    "run_name": "PPO_medium-log_10-advance_plus_1-k_a_advance",
     "seeds": [400287],
     "bar_table_path": "../data/bar_table.csv",
     "tracking_uri": "sqlite:///mlflow.db",
@@ -37,5 +37,5 @@
     "price_plot_request_dates": ["2025-01-15", "2025-02-28", "2025-04-15"],
     "evaluate_baselines": true
   },
-  "cancellation": {"daily_probability": 0.005, "price_sensitivity": 1.0, "high_season_multiplier": 0.8}
+  "cancellation": {"base_daily_cancellation_prob": 0.005, "high_season_multiplier": 0.8}
 }

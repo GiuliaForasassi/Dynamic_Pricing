@@ -675,18 +675,27 @@ class PricingEnv(gym.Env):
         confirmed_mask: np.ndarray,
     ) -> dict[int, int]:
         model = self.cancellation_model
-        if model is None or model.daily_probability == 0:
+        if model is None or model.base_daily_cancellation_prob == 0:
             return {}
         booking_ids = {}
         for index in np.flatnonzero(confirmed_mask):
             offer = cast("HotelOffer", offers[int(index)])
-            prices = tuple(float(price) for price in daily_prices[index])
-            probability = model.probability(offer.category, offer.t_reservation, prices)
+            prices = daily_prices[index]
             advance = (offer.t_reservation - self.today).days
-            waiting_days = model.sample_waiting_days(probability, advance, self.cancellation_rng)
-            cancellation_day = (
-                self.today + timedelta(days=waiting_days) if waiting_days is not None else None
+            cancellation_prob = model.cancellation_probability(
+                offer.category, offer.t_reservation, prices, advance
             )
+
+            # Determine if the booking will be canceled
+            draw = self.cancellation_rng.random()
+            cancellation_day = None
+            if draw < cancellation_prob and advance > 1:
+                # The booking will be cancelled, determine the cancellation day
+                waiting_days = model.sample_cancellation_waiting_days(
+                    advance, self.cancellation_rng
+                )
+                cancellation_day = self.today + timedelta(days=waiting_days)
+
             booking_id = self._next_booking_id
             self._next_booking_id += 1
             self._bookings[booking_id] = Booking(
@@ -696,7 +705,7 @@ class PricingEnv(gym.Env):
                 check_in=offer.t_reservation,
                 nightly_prices=prices,
                 total_price=float(total_prices[index]),
-                cancellation_probability=probability,
+                cancellation_probability=cancellation_prob,
                 cancellation_day=cancellation_day,
             )
             booking_ids[int(index)] = booking_id
